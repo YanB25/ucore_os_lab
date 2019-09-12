@@ -223,8 +223,6 @@ debug: $(UCOREIMG)
 	
 debug-nox: $(UCOREIMG)
 	$(V)$(QEMU) -no-reboot -S -s -serial mon:stdio -hda $< -nographic &
-	# $(V)sleep 2
-	# $(V)$(TERMINAL) -e "gdb -q -x tools/gdbinit"
 debug-gdb:
 	gdb -q -x tools/gdbinit
 
