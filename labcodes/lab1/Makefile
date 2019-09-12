@@ -222,9 +222,11 @@ debug: $(UCOREIMG)
 	$(V)$(TERMINAL) -e "gdb -q -tui -x tools/gdbinit"
 	
 debug-nox: $(UCOREIMG)
-	$(V)$(QEMU) -S -s -serial mon:stdio -hda $< -nographic &
-	$(V)sleep 2
-	$(V)$(TERMINAL) -e "gdb -q -x tools/gdbinit"
+	$(V)$(QEMU) -no-reboot -S -s -serial mon:stdio -hda $< -nographic &
+	# $(V)sleep 2
+	# $(V)$(TERMINAL) -e "gdb -q -x tools/gdbinit"
+debug-gdb:
+	gdb -q -x tools/gdbinit
 
 .PHONY: grade touch
 
