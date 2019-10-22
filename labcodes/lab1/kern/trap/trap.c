@@ -10,6 +10,13 @@
 #include <kdebug.h>
 
 #define TICK_NUM 100
+// number of interrupt that is reserved by intel
+#define N_RESERVED_INT 32
+#define N_INT 256
+// selector for kernel code
+#define PROT_MODE_CSEG 0x8
+// selector for kernel data
+#define PROT_MODE_DSEG 0x10
 
 static void print_ticks() {
     cprintf("%d ticks\n",TICK_NUM);
@@ -25,11 +32,13 @@ static void print_ticks() {
  * Must be built at run time because shifted function addresses can't
  * be represented in relocation records.
  * */
-static struct gatedesc idt[256] = {{0}};
+static struct gatedesc idt[N_INT] = {{0}};
 
 static struct pseudodesc idt_pd = {
     sizeof(idt) - 1, (uintptr_t)idt
 };
+
+extern uintptr_t __vectors[]; // entry addrs of each ISR
 
 /* idt_init - initialize IDT to each of the entry points in kern/trap/vectors.S */
 void
@@ -46,6 +55,17 @@ idt_init(void) {
       *     You don't know the meaning of this instruction? just google it! and check the libs/x86.h to know more.
       *     Notice: the argument of lidt is idt_pd. try to find it!
       */
+
+    for (int i = 0; i < N_RESERVED_INT; ++i) {
+        SETGATE(idt[i], 0, PROT_MODE_CSEG, __vectors[i], DPL_KERNEL);
+    }
+    for (int i = N_RESERVED_INT; i < N_INT; ++i) {
+        SETGATE(idt[i], 0, PROT_MODE_CSEG, __vectors[i], DPL_KERNEL);
+    }
+    // set DPL to DPL_USER to permit user to use `int 80`
+    SETGATE(idt[T_SYSCALL], 1, PROT_MODE_CSEG, __vectors[80] , DPL_USER);
+    // load IDT
+    lidt(&idt_pd);
 }
 
 static const char *
@@ -147,6 +167,10 @@ trap_dispatch(struct trapframe *tf) {
          * (2) Every TICK_NUM cycle, you can print some info using a funciton, such as print_ticks().
          * (3) Too Simple? Yes, I think so!
          */
+        ticks++;
+        if (ticks % TICK_NUM == 0) {
+            print_ticks();
+        }
         break;
     case IRQ_OFFSET + IRQ_COM1:
         c = cons_getc();

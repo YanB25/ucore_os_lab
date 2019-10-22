@@ -71,6 +71,9 @@ read_ebp(void) {
 
 static inline void
 lidt(struct pseudodesc *pd) {
+    // LIDT m16&32
+    // `r` is a register whose value points to the pseudodesc.
+    // (%0) read the memory and retrieve the 6 bytes IDT limit and base.
     asm volatile ("lidt (%0)" :: "r" (pd));
 }
 

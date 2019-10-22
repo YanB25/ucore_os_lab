@@ -80,6 +80,14 @@ struct gatedesc {
     (gate).gd_off_31_16 = (uint32_t)(off) >> 16;        \
 }
 
+/**
+ * Return a selector for GDT/LDT
+ *   - rpl: Request priviledge level
+ *   - ti: Table indicator. 0 for GDT and 1 for LDT
+ *   - idx: Index
+ */
+#define SETSEL(rpl, ti, idx) ( (rpl & 0b11) + ((ti & 1) << 2) + (rpl & 0x1fff) << 3)
+
 /* Set up a call gate descriptor */
 #define SETCALLGATE(gate, ss, off, dpl) {                \
     (gate).gd_off_15_0 = (uint32_t)(off) & 0xffff;        \
