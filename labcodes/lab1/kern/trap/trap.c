@@ -182,6 +182,8 @@ trap_dispatch(struct trapframe *tf) {
         break;
     //LAB1 CHALLENGE 1 : YOUR CODE you should modify below codes.
     case T_SWITCH_TOU:
+        cprintf("Switching to user...\n");
+        break;
     case T_SWITCH_TOK:
         panic("T_SWITCH_** ??\n");
         break;
