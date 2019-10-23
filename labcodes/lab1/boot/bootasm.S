@@ -7,8 +7,6 @@
 
 .set PROT_MODE_CSEG,        0x8                     # kernel code segment selector
 .set PROT_MODE_DSEG,        0x10                    # kernel data segment selector
-.set PROT_MODE_UCSEG,       0x1B                    # user code segment selector
-.set PROT_MODE_UDSEG,       0x23                    # user data segment selector
 .set CR0_PE_ON,             0x1                     # protected mode enable flag
 
 # start address should be 0:7c00, in real mode, the beginning address of the running bootloader
@@ -82,8 +80,6 @@ gdt:
     SEG_NULLASM                                     # null seg
     SEG_ASM(STA_X|STA_R, 0x0, 0xffffffff)           # code seg for bootloader and kernel
     SEG_ASM(STA_W, 0x0, 0xffffffff)                 # data seg for bootloader and kernel
-    SEG_UASM(STA_X|STA_R, 0x0, 0xffffffff)           # code seg for user
-    SEG_UASM(STA_W, 0x0, 0xffffffff)                 # data seg for user
 
 gdtdesc:
     .word 0x17                                      # sizeof(gdt) - 1
