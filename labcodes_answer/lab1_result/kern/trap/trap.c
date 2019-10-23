@@ -185,6 +185,7 @@ trap_dispatch(struct trapframe *tf) {
             switchk2u.tf_eflags |= FL_IOPL_MASK;
 		
             // set temporary stack
+            // the address will be `popl esp`, so stack change to &switchk2u.
             // then iret will jump to the right stack
             *((uint32_t *)tf - 1) = (uint32_t)&switchk2u;
         }

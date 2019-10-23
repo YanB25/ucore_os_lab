@@ -57,14 +57,13 @@ idt_init(void) {
       *     Notice: the argument of lidt is idt_pd. try to find it!
       */
 
-    for (int i = 0; i < N_RESERVED_INT; ++i) {
-        SETGATE(idt[i], 0, PROT_MODE_CSEG, __vectors[i], DPL_KERNEL);
-    }
-    for (int i = N_RESERVED_INT; i < N_INT; ++i) {
+    for (int i = 0; i < N_INT; ++i) {
         SETGATE(idt[i], 0, PROT_MODE_CSEG, __vectors[i], DPL_KERNEL);
     }
     // set DPL to DPL_USER to permit user to use `int 80`
-    SETGATE(idt[T_SYSCALL], 1, PROT_MODE_CSEG, __vectors[80] , DPL_USER);
+    SETGATE(idt[T_SYSCALL], 1, PROT_MODE_CSEG, __vectors[T_SYSCALL] , DPL_USER);
+    /* temporary open this int */
+    SETGATE(idt[T_SWITCH_TOK], 1, PROT_MODE_CSEG, __vectors[T_SWITCH_TOK] , DPL_USER);
     // load IDT
     lidt(&idt_pd);
 }
@@ -194,10 +193,37 @@ trap_dispatch(struct trapframe *tf) {
         tf->tf_gs = PROT_MODE_UDSEG;
         tf->tf_ss = PROT_MODE_UDSEG;
         tf->tf_cs = PROT_MODE_UCSEG; /* Code Selector Here */
+        tf->tf_eflags &= ~FL_IOPL_MASK;
         tf->tf_eflags |= FL_IOPL_3; /* set IOPL=3 to allow ring3 to access IO port */
         break;
     case T_SWITCH_TOK:
-        panic("T_SWITCH_** ??\n");
+        if (tf->tf_cs != KERNEL_CS) {
+            cprintf("Switching to kernel...\n");
+            tf->tf_ds = PROT_MODE_DSEG;
+            tf->tf_es = PROT_MODE_DSEG;
+            tf->tf_fs = PROT_MODE_DSEG;
+            tf->tf_gs = PROT_MODE_DSEG;
+            tf->tf_ss = PROT_MODE_DSEG;
+            tf->tf_cs = PROT_MODE_CSEG; /* Code Selector Here */
+            /* clear bits */
+            tf->tf_eflags &= ~FL_IOPL_MASK;
+            /* reset to IOPL=0 */
+            tf->tf_eflags |= FL_IOPL_0;
+        } else {
+            panic("unexpected T_SWITCH_TOK in kernel detected.\n");
+        }
+        break;
+    case T_SYSCALL:
+        /* empty statment here to workaround */ ;
+        uint32_t eax = tf->tf_regs.reg_eax;
+        cprintf("[syscall] %eax=0x%08x(%u)\n", eax, eax);
+        switch (eax) {
+        case 0xff:
+            /* TODO: add example syscall here */
+            break;
+        default:
+            panic("unexpected syscall %eax=%eax=0x%08x(%u)\n", eax, eax);
+        }
         break;
     case IRQ_OFFSET + IRQ_IDE1:
     case IRQ_OFFSET + IRQ_IDE2:

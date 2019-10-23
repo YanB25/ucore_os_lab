@@ -83,6 +83,7 @@ lab1_print_cur_status(void) {
 
 static void
 lab1_switch_to_user(void) {
+    //LAB1 CHALLENGE 1 : TODO
     /**
      * Stack: Low address -> High address
      * 32: ss (and padding)
@@ -91,7 +92,6 @@ lab1_switch_to_user(void) {
      * 32: cs (and padding)
      * 32: eip
      */
-    //LAB1 CHALLENGE 1 : TODO
     __asm__ volatile(
         "movl %%esp, %%eax \n\t"
         "pushl %%ss \n\t"
@@ -105,6 +105,17 @@ lab1_switch_to_user(void) {
 static void
 lab1_switch_to_kernel(void) {
     //LAB1 CHALLENGE 1 :  TODO
+    /**
+     * TSS works here and change ss:esp to `stack0` when int 0x70.
+     * After the interrupt, ss:esp should be manually set to the origin value.
+     */
+    __asm__ volatile(
+        "int %0 \n\t"
+        "movw 0x4(%%esp), %%ss \n\t"
+        "popl %%esp \n\t"
+        : /* output */
+        : "i"(T_SWITCH_TOK)
+    );
 }
 
 static void
