@@ -24,6 +24,7 @@
         (0xC0 | (((lim) >> 28) & 0xf)), (((base) >> 24) & 0xff)
 
 /**
+ * NOTICE: no need for this macro, since GDT will be gracefully reloaded after init.
  * set descriptor for user mode
  * 0xf0 -> 0b1111_0000
  * the middle `11` for DPL=3

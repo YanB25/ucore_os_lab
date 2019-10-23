@@ -154,9 +154,6 @@ print_regs(struct pushregs *regs) {
     cprintf("  eax  0x%08x\n", regs->reg_eax);
 }
 
-static struct trapframe tf_switch_tou = {};
-static struct trapframe tf_switch_tok = {};
-
 /* trap_dispatch - dispatch based on what type of trap occurred */
 static void
 trap_dispatch(struct trapframe *tf) {
@@ -185,16 +182,19 @@ trap_dispatch(struct trapframe *tf) {
         break;
     //LAB1 CHALLENGE 1 : YOUR CODE you should modify below codes.
     case T_SWITCH_TOU:
-        cprintf("Switching to user...\n");
-        __memcpy(&tf_switch_tou, tf, sizeof(struct trapframe));
-        tf->tf_ds = PROT_MODE_UDSEG;
-        tf->tf_es = PROT_MODE_UDSEG;
-        tf->tf_fs = PROT_MODE_UDSEG;
-        tf->tf_gs = PROT_MODE_UDSEG;
-        tf->tf_ss = PROT_MODE_UDSEG;
-        tf->tf_cs = PROT_MODE_UCSEG; /* Code Selector Here */
-        tf->tf_eflags &= ~FL_IOPL_MASK;
-        tf->tf_eflags |= FL_IOPL_3; /* set IOPL=3 to allow ring3 to access IO port */
+        if (tf->tf_cs != USER_CS) {
+            cprintf("Switching to user...\n");
+            tf->tf_ds = PROT_MODE_UDSEG;
+            tf->tf_es = PROT_MODE_UDSEG;
+            tf->tf_fs = PROT_MODE_UDSEG;
+            tf->tf_gs = PROT_MODE_UDSEG;
+            tf->tf_ss = PROT_MODE_UDSEG;
+            tf->tf_cs = PROT_MODE_UCSEG; /* Code Selector Here */
+            tf->tf_eflags &= ~FL_IOPL_MASK;
+            tf->tf_eflags |= FL_IOPL_3; /* set IOPL=3 to allow ring3 to access IO port */
+        } else {
+            panic("unexpected T_SWITCH_TOU in user space detected.\n");
+        }
         break;
     case T_SWITCH_TOK:
         if (tf->tf_cs != KERNEL_CS) {
