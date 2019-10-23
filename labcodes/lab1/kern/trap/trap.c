@@ -216,13 +216,15 @@ trap_dispatch(struct trapframe *tf) {
     case T_SYSCALL:
         /* empty statment here to workaround */ ;
         uint32_t eax = tf->tf_regs.reg_eax;
-        cprintf("[syscall] %eax=0x%08x(%u)\n", eax, eax);
+        cprintf("[syscall] %%eax=0x%02x(%u)\n", eax, eax);
         switch (eax) {
         case 0xff:
+            tf->tf_regs.reg_eax = ticks;
+            cprintf("in kernel, ticks is %u\n", ticks);
             /* TODO: add example syscall here */
             break;
         default:
-            panic("unexpected syscall %eax=%eax=0x%08x(%u)\n", eax, eax);
+            panic("unexpected syscall %%eax=0x%02x(%u)\n", eax, eax);
         }
         break;
     case IRQ_OFFSET + IRQ_IDE1:

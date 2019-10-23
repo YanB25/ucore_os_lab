@@ -125,13 +125,27 @@ trigger_gpf() {
     );
 }
 
+static uint32_t
+get_ticks() {
+    uint32_t __ticks;
+    __asm__ volatile(
+        "movl $0xff, %%eax \n\t"
+        "int $0x80 \n\t"
+        : "=a"(__ticks)
+        : /* empty input */
+    );
+    return __ticks;
+}
+
 static void
 lab1_switch_test(void) {
     lab1_print_cur_status();
     cprintf("+++ switch to  user  mode +++\n");
     lab1_switch_to_user();
     lab1_print_cur_status();
-    // trigger_gpf();
+    // trigger_gpf(); /* trigger general protection fault pass test */
+    uint32_t _ticks = get_ticks();
+    cprintf("Get ticks %u in user mode\n", _ticks);
     cprintf("+++ switch to kernel mode +++\n");
     lab1_switch_to_kernel();
     lab1_print_cur_status();
