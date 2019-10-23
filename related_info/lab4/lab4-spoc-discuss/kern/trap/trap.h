@@ -59,6 +59,20 @@ struct pushregs {
     uint32_t reg_eax;
 };
 
+/**
+ * From gs -> ds, the address is ascending.
+ * 
+ * low address:
+ * 32: eflags
+ * 32: cs
+ * 32: ip
+ * 32: err code
+ * 32: trap number
+ * 32: ds
+ * 32: es
+ * 32: fs
+ * 32: gs
+ */
 struct trapframe {
     struct pushregs tf_regs;
     uint16_t tf_gs;

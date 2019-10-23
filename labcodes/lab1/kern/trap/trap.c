@@ -13,10 +13,11 @@
 // number of interrupt that is reserved by intel
 #define N_RESERVED_INT 32
 #define N_INT 256
-// selector for kernel code
+/* selectors */
 #define PROT_MODE_CSEG 0x8
-// selector for kernel data
 #define PROT_MODE_DSEG 0x10
+#define PROT_MODE_UCSEG 0x1B
+#define PROT_MODE_UDSEG 0x23
 
 static void print_ticks() {
     cprintf("%d ticks\n",TICK_NUM);
@@ -154,6 +155,9 @@ print_regs(struct pushregs *regs) {
     cprintf("  eax  0x%08x\n", regs->reg_eax);
 }
 
+static struct trapframe tf_switch_tou = {};
+static struct trapframe tf_switch_tok = {};
+
 /* trap_dispatch - dispatch based on what type of trap occurred */
 static void
 trap_dispatch(struct trapframe *tf) {
@@ -183,6 +187,13 @@ trap_dispatch(struct trapframe *tf) {
     //LAB1 CHALLENGE 1 : YOUR CODE you should modify below codes.
     case T_SWITCH_TOU:
         cprintf("Switching to user...\n");
+        __memcpy(&tf_switch_tou, tf, sizeof(struct trapframe));
+        tf->tf_ds = PROT_MODE_UDSEG;
+        tf->tf_es = PROT_MODE_UDSEG;
+        tf->tf_fs = PROT_MODE_UDSEG;
+        tf->tf_gs = PROT_MODE_UDSEG;
+        tf->tf_ss = PROT_MODE_UDSEG;
+        tf->tf_cs = PROT_MODE_UCSEG; /* Code Selector Here */
         break;
     case T_SWITCH_TOK:
         panic("T_SWITCH_** ??\n");

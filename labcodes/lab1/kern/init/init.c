@@ -83,8 +83,25 @@ lab1_print_cur_status(void) {
 
 static void
 lab1_switch_to_user(void) {
+    /** TODO:
+     * 1) fix the bug that mov $$ss, the higher 16 bits are random.
+     * 2) after int %0 should follow pop-ups.
+     * 3) in trap.c, should modify esp & ss to user's stack. 
+     */
+
+    /**
+     * Stack: Low address -> High address
+     * 32: ss (and padding)
+     * 32: esp
+     * 32: eflags
+     * 32: cs (and padding)
+     * 32: eip
+     */
     __asm__ volatile(
-        "int %0"
+        "subl $0x8, %%esp \n\t"
+        "mov %%ss, 0x4(%%esp) \n\t"
+        "movl %%esp, (%%esp) \n\t"
+        "int %0 \n\t"
         : /* output */
         : "i"(T_SWITCH_TOU)
     );

@@ -1,6 +1,8 @@
 #ifndef __KERN_MM_MMU_H__
 #define __KERN_MM_MMU_H__
 
+#include <defs.h>
+
 /* Eflags register */
 #define FL_CF            0x00000001    // Carry Flag
 #define FL_PF            0x00000004    // Parity Flag
