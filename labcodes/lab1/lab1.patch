@@ -1,0 +1,415 @@
+diff -r -u -P lab1.origin/boot/asm.h lab1/boot/asm.h
+--- lab1.origin/boot/asm.h	2019-10-24 02:03:09.971654910 +0800
++++ lab1/boot/asm.h	2019-10-24 02:03:18.571655161 +0800
+@@ -8,18 +8,38 @@
+     .word 0, 0;                                                 \
+     .byte 0, 0, 0, 0
+ 
++/**
++ * 0x90 -> 0b1001_0000
++ * the rightmost 1 for `always`, should be 1 for everything but TSS and LDT
++ * the leftmost 1 for `present`
++ * the middle `00` for DPL
++ * 
++ * 0xC0 -> 0b1100_0000
++ * the leftmost first 1 for gran=1, use 4k page addressing
++ * the left second 1 for big=1, 32bit opcodes for code, uint32_t stack for data
++ */
+ #define SEG_ASM(type,base,lim)                                  \
+     .word (((lim) >> 12) & 0xffff), ((base) & 0xffff);          \
+     .byte (((base) >> 16) & 0xff), (0x90 | (type)),             \
+         (0xC0 | (((lim) >> 28) & 0xf)), (((base) >> 24) & 0xff)
+ 
++/**
++ * NOTICE: no need for this macro, since GDT will be gracefully reloaded after init.
++ * set descriptor for user mode
++ * 0xf0 -> 0b1111_0000
++ * the middle `11` for DPL=3
++ */
++#define SEG_UASM(type,base,lim)                                  \
++    .word (((lim) >> 12) & 0xffff), ((base) & 0xffff);          \
++    .byte (((base) >> 16) & 0xff), (0xf0 | (type)),             \
++        (0xC0 | (((lim) >> 28) & 0xf)), (((base) >> 24) & 0xff)
+ 
+ /* Application segment type bits */
+ #define STA_X       0x8     // Executable segment
+-#define STA_E       0x4     // Expand down (non-executable segments)
+-#define STA_C       0x4     // Conforming code segment (executable only)
+-#define STA_W       0x2     // Writeable (non-executable segments)
+-#define STA_R       0x2     // Readable (executable segments)
++#define STA_E       0x4     // Expand down (for non-executable segments)
++#define STA_C       0x4     // Conforming code segment (for executable only)
++#define STA_W       0x2     // Writeable (for non-executable segments)
++#define STA_R       0x2     // Readable (for executable segments)
+ #define STA_A       0x1     // Accessed
+ 
+ #endif /* !__BOOT_ASM_H__ */
+diff -r -u -P lab1.origin/kern/debug/kdebug.c lab1/kern/debug/kdebug.c
+--- lab1.origin/kern/debug/kdebug.c	2019-10-24 02:03:09.978321577 +0800
++++ lab1/kern/debug/kdebug.c	2019-10-24 02:03:18.574988495 +0800
+@@ -293,7 +293,7 @@
+      /* LAB1 YOUR CODE : STEP 1 */
+      /* (1) call read_ebp() to get the value of ebp. the type is (uint32_t);
+       * (2) call read_eip() to get the value of eip. the type is (uint32_t);
+-      * (3) from 0 .. STACKFRAME_DEPTH
++      * (3) from 0 .. STACKFRAME_DEkPTH
+       *    (3.1) printf value of ebp, eip
+       *    (3.2) (uint32_t)calling arguments [0..4] = the contents in address (uint32_t)ebp +2 [0..4]
+       *    (3.3) cprintf("\n");
+@@ -302,5 +302,17 @@
+       *           NOTICE: the calling funciton's return addr eip  = ss:[ebp+4]
+       *                   the calling funciton's ebp = ss:[ebp]
+       */
++    uint32_t ebp = read_ebp();
++    uint32_t eip = read_eip();
++    int _depth = 0;
++    while (ebp != 0 && _depth++ < STACKFRAME_DEPTH) {
++        cprintf("ebp:0x%08x eip:0x%08x ", ebp, eip);
++        uint32_t* args = ((uint32_t*) ebp) + 2;
++        cprintf("args: 0x%08x 0x%08x 0x%08x 0x%08x\n", args[0], args[1], args[2], args[3]);
++        print_debuginfo(eip - 1);
++        eip = *(((uint32_t*) ebp) + 1);
++        ebp = *((uint32_t*) ebp);
++    }
++
+ }
+ 
+diff -r -u -P lab1.origin/kern/init/init.c lab1/kern/init/init.c
+--- lab1.origin/kern/init/init.c	2019-10-24 02:03:09.978321577 +0800
++++ lab1/kern/init/init.c	2019-10-24 02:03:18.574988495 +0800
+@@ -37,7 +37,7 @@
+ 
+     //LAB1: CAHLLENGE 1 If you try to do it, uncomment lab1_switch_test()
+     // user/kernel mode switch test
+-    //lab1_switch_test();
++    lab1_switch_test();
+ 
+     /* do nothing */
+     while (1);
+@@ -84,11 +84,57 @@
+ static void
+ lab1_switch_to_user(void) {
+     //LAB1 CHALLENGE 1 : TODO
++    /**
++     * Stack: Low address -> High address
++     * 32: ss (and padding)
++     * 32: esp
++     * 32: eflags
++     * 32: cs (and padding)
++     * 32: eip
++     */
++    __asm__ volatile(
++        "movl %%esp, %%eax \n\t"
++        "pushl %%ss \n\t"
++        "pushl %%eax \n\t"
++        "int %0 \n\t"
++        : /* output */
++        : "i"(T_SWITCH_TOU)
++    );
+ }
+ 
+ static void
+ lab1_switch_to_kernel(void) {
+     //LAB1 CHALLENGE 1 :  TODO
++    /**
++     * TSS works here and change ss:esp to `stack0` when int 0x70.
++     * After the interrupt, ss:esp should be manually set to the origin value.
++     */
++    __asm__ volatile(
++        "int %0 \n\t"
++        "movw 0x4(%%esp), %%ss \n\t"
++        "popl %%esp \n\t"
++        : /* output */
++        : "i"(T_SWITCH_TOK)
++    );
++}
++
++static void
++trigger_gpf() {
++    __asm__ volatile(
++        "int $0x1 \n\t"
++    );
++}
++
++static uint32_t
++get_ticks() {
++    uint32_t __ticks;
++    __asm__ volatile(
++        "movl $0xff, %%eax \n\t"
++        "int $0x80 \n\t"
++        : "=a"(__ticks)
++        : /* empty input */
++    );
++    return __ticks;
+ }
+ 
+ static void
+@@ -97,6 +143,9 @@
+     cprintf("+++ switch to  user  mode +++\n");
+     lab1_switch_to_user();
+     lab1_print_cur_status();
++    // trigger_gpf(); /* trigger general protection fault pass test */
++    uint32_t _ticks = get_ticks();
++    cprintf("Get ticks %u in user mode\n", _ticks);
+     cprintf("+++ switch to kernel mode +++\n");
+     lab1_switch_to_kernel();
+     lab1_print_cur_status();
+diff -r -u -P lab1.origin/kern/mm/mmu.h lab1/kern/mm/mmu.h
+--- lab1.origin/kern/mm/mmu.h	2019-10-24 02:03:09.978321577 +0800
++++ lab1/kern/mm/mmu.h	2019-10-24 02:03:18.574988495 +0800
+@@ -1,6 +1,8 @@
+ #ifndef __KERN_MM_MMU_H__
+ #define __KERN_MM_MMU_H__
+ 
++#include <defs.h>
++
+ /* Eflags register */
+ #define FL_CF            0x00000001    // Carry Flag
+ #define FL_PF            0x00000004    // Parity Flag
+@@ -80,6 +82,14 @@
+     (gate).gd_off_31_16 = (uint32_t)(off) >> 16;        \
+ }
+ 
++/**
++ * Return a selector for GDT/LDT
++ *   - rpl: Request priviledge level
++ *   - ti: Table indicator. 0 for GDT and 1 for LDT
++ *   - idx: Index
++ */
++#define SETSEL(rpl, ti, idx) ( (rpl & 0b11) + ((ti & 1) << 2) + (rpl & 0x1fff) << 3)
++
+ /* Set up a call gate descriptor */
+ #define SETCALLGATE(gate, ss, off, dpl) {                \
+     (gate).gd_off_15_0 = (uint32_t)(off) & 0xffff;        \
+diff -r -u -P lab1.origin/kern/trap/trap.c lab1/kern/trap/trap.c
+--- lab1.origin/kern/trap/trap.c	2019-10-24 02:03:09.978321577 +0800
++++ lab1/kern/trap/trap.c	2019-10-24 02:03:18.574988495 +0800
+@@ -10,6 +10,14 @@
+ #include <kdebug.h>
+ 
+ #define TICK_NUM 100
++// number of interrupt that is reserved by intel
++#define N_RESERVED_INT 32
++#define N_INT 256
++/* selectors */
++#define PROT_MODE_CSEG 0x8
++#define PROT_MODE_DSEG 0x10
++#define PROT_MODE_UCSEG 0x1B
++#define PROT_MODE_UDSEG 0x23
+ 
+ static void print_ticks() {
+     cprintf("%d ticks\n",TICK_NUM);
+@@ -25,12 +33,14 @@
+  * Must be built at run time because shifted function addresses can't
+  * be represented in relocation records.
+  * */
+-static struct gatedesc idt[256] = {{0}};
++static struct gatedesc idt[N_INT] = {{0}};
+ 
+ static struct pseudodesc idt_pd = {
+     sizeof(idt) - 1, (uintptr_t)idt
+ };
+ 
++extern uintptr_t __vectors[]; // entry addrs of each ISR
++
+ /* idt_init - initialize IDT to each of the entry points in kern/trap/vectors.S */
+ void
+ idt_init(void) {
+@@ -46,6 +56,16 @@
+       *     You don't know the meaning of this instruction? just google it! and check the libs/x86.h to know more.
+       *     Notice: the argument of lidt is idt_pd. try to find it!
+       */
++
++    for (int i = 0; i < N_INT; ++i) {
++        SETGATE(idt[i], 0, PROT_MODE_CSEG, __vectors[i], DPL_KERNEL);
++    }
++    // set DPL to DPL_USER to permit user to use `int 80`
++    SETGATE(idt[T_SYSCALL], 1, PROT_MODE_CSEG, __vectors[T_SYSCALL] , DPL_USER);
++    /* temporary open this int */
++    SETGATE(idt[T_SWITCH_TOK], 1, PROT_MODE_CSEG, __vectors[T_SWITCH_TOK] , DPL_USER);
++    // load IDT
++    lidt(&idt_pd);
+ }
+ 
+ static const char *
+@@ -134,6 +154,39 @@
+     cprintf("  eax  0x%08x\n", regs->reg_eax);
+ }
+ 
++static int do_switch_to_user(struct trapframe *tf) {
++    if (tf->tf_cs != USER_CS) {
++        tf->tf_ds = PROT_MODE_UDSEG;
++        tf->tf_es = PROT_MODE_UDSEG;
++        tf->tf_fs = PROT_MODE_UDSEG;
++        tf->tf_gs = PROT_MODE_UDSEG;
++        tf->tf_ss = PROT_MODE_UDSEG;
++        tf->tf_cs = PROT_MODE_UCSEG; /* Code Selector Here */
++        tf->tf_eflags &= ~FL_IOPL_MASK;
++        tf->tf_eflags |= FL_IOPL_3; /* set IOPL=3 to allow ring3 to access IO port */
++        return 0;
++    }
++    return 1;
++}
++
++static int do_switch_to_kernel(struct trapframe *tf) {
++    if (tf->tf_cs != KERNEL_CS) {
++        cprintf("Switching to kernel...\n");
++        tf->tf_ds = PROT_MODE_DSEG;
++        tf->tf_es = PROT_MODE_DSEG;
++        tf->tf_fs = PROT_MODE_DSEG;
++        tf->tf_gs = PROT_MODE_DSEG;
++        tf->tf_ss = PROT_MODE_DSEG;
++        tf->tf_cs = PROT_MODE_CSEG; /* Code Selector Here */
++        /* clear bits */
++        tf->tf_eflags &= ~FL_IOPL_MASK;
++        /* reset to IOPL=0 */
++        tf->tf_eflags |= FL_IOPL_0;
++        return 0;
++    }
++    return 1;
++}
++
+ /* trap_dispatch - dispatch based on what type of trap occurred */
+ static void
+ trap_dispatch(struct trapframe *tf) {
+@@ -147,10 +200,23 @@
+          * (2) Every TICK_NUM cycle, you can print some info using a funciton, such as print_ticks().
+          * (3) Too Simple? Yes, I think so!
+          */
++        ticks++;
++        if (ticks % TICK_NUM == 0) {
++            print_ticks();
++        }
+         break;
+     case IRQ_OFFSET + IRQ_COM1:
+         c = cons_getc();
+         cprintf("serial [%03d] %c\n", c, c);
++        if (c == '0') {
++            if (!do_switch_to_kernel(tf)) {
++                print_trapframe(tf);
++            }
++        } else if (c == '3') {
++            if (!do_switch_to_user(tf)) {
++                print_trapframe(tf);
++            }
++        }
+         break;
+     case IRQ_OFFSET + IRQ_KBD:
+         c = cons_getc();
+@@ -158,19 +224,46 @@
+         break;
+     //LAB1 CHALLENGE 1 : YOUR CODE you should modify below codes.
+     case T_SWITCH_TOU:
++        if (do_switch_to_user(tf)) {
++            panic("unexpected T_SWITCH_TOU in user space detected.\n");
++        }
++        break;
+     case T_SWITCH_TOK:
+-        panic("T_SWITCH_** ??\n");
++        if (do_switch_to_kernel(tf)) {
++            panic("unexpected T_SWITCH_TOK in user space detected.\n");
++        }
++        break;
++    case T_SYSCALL:
++        /* empty statment here to workaround */ ;
++        uint32_t eax = tf->tf_regs.reg_eax;
++        cprintf("[syscall] %%eax=0x%02x(%u)\n", eax, eax);
++        switch (eax) {
++        case 0xff:
++            tf->tf_regs.reg_eax = ticks;
++            cprintf("in kernel, ticks is %u\n", ticks);
++            break;
++        default:
++            panic("unexpected syscall %%eax=0x%02x(%u)\n", eax, eax);
++        }
+         break;
+     case IRQ_OFFSET + IRQ_IDE1:
+     case IRQ_OFFSET + IRQ_IDE2:
+         /* do nothing */
+         break;
++    case T_GPFLT: /* general protection fault */
++        cprintf("General Protection Fault with errno 0x%08x\n", tf->tf_err);
++        panic("General Protection Fault\n");
++    break;
+     default:
+         // in kernel, it must be a mistake
+         if ((tf->tf_cs & 3) == 0) {
+             print_trapframe(tf);
+             panic("unexpected trap in kernel.\n");
+         }
++        uint32_t tn = tf->tf_trapno;
++        uint32_t en = tf->tf_err;
++        cprintf("Unexpected uncategoried trap 0x%08x(%u) with errno 0x%08x(%u)\n", tn, tn, en, en);
++        panic("Unexpected Uncategoried Trap\n");
+     }
+ }
+ 
+diff -r -u -P lab1.origin/kern/trap/trapentry.S lab1/kern/trap/trapentry.S
+--- lab1.origin/kern/trap/trapentry.S	2019-10-24 02:03:09.978321577 +0800
++++ lab1/kern/trap/trapentry.S	2019-10-24 02:03:18.574988495 +0800
+@@ -18,6 +18,8 @@
+     movw %ax, %es
+ 
+     # push %esp to pass a pointer to the trapframe as an argument to trap()
++    # esp <- esp - 4
++    # M[ss:esp] <- SRC
+     pushl %esp
+ 
+     # call trap(tf), where tf=%esp
+@@ -40,5 +42,13 @@
+ 
+     # get rid of the trap number and error code
+     addl $0x8, %esp
++    # the stack is supposed to be
++    # Low address -> High address
++    # 32: eip
++    # 32: cs (and padding)
++    # 32: elflags
++    # (Optional) BELOW ONLY WHEN CROSSING RINGS:
++    # 32: esp 
++    # 32: ss (and padding)
+     iret
+ 
+diff -r -u -P lab1.origin/libs/x86.h lab1/libs/x86.h
+--- lab1.origin/libs/x86.h	2019-10-24 02:03:09.978321577 +0800
++++ lab1/libs/x86.h	2019-10-24 02:03:18.574988495 +0800
+@@ -71,6 +71,9 @@
+ 
+ static inline void
+ lidt(struct pseudodesc *pd) {
++    // LIDT m16&32
++    // `r` is a register whose value points to the pseudodesc.
++    // (%0) read the memory and retrieve the 6 bytes IDT limit and base.
+     asm volatile ("lidt (%0)" :: "r" (pd));
+ }
+ 
+diff -r -u -P lab1.origin/Makefile lab1/Makefile
+--- lab1.origin/Makefile	2019-10-24 02:03:09.971654910 +0800
++++ lab1/Makefile	2019-10-24 02:03:18.571655161 +0800
+@@ -222,9 +222,9 @@
+ 	$(V)$(TERMINAL) -e "gdb -q -tui -x tools/gdbinit"
+ 	
+ debug-nox: $(UCOREIMG)
+-	$(V)$(QEMU) -S -s -serial mon:stdio -hda $< -nographic &
+-	$(V)sleep 2
+-	$(V)$(TERMINAL) -e "gdb -q -x tools/gdbinit"
++	$(V)$(QEMU) -no-reboot -S -s -serial mon:stdio -hda $< -nographic &
++debug-gdb:
++	gdb -q -x tools/gdbinit
+ 
+ .PHONY: grade touch
+ 
+diff -r -u -P lab1.origin/tools/gdbinit lab1/tools/gdbinit
+--- lab1.origin/tools/gdbinit	2019-10-24 02:03:09.978321577 +0800
++++ lab1/tools/gdbinit	2019-10-24 02:03:18.574988495 +0800
+@@ -1,4 +1,8 @@
+ file bin/kernel
+ target remote :1234
++break *0x7c00
+ break kern_init
+-continue
+\ No newline at end of file
++define hook-stop
++x/i $pc
++end
++continue

@@ -10,6 +10,14 @@
 #include <kdebug.h>
 
 #define TICK_NUM 100
+// number of interrupt that is reserved by intel
+#define N_RESERVED_INT 32
+#define N_INT 256
+/* selectors */
+#define PROT_MODE_CSEG 0x8
+#define PROT_MODE_DSEG 0x10
+#define PROT_MODE_UCSEG 0x1B
+#define PROT_MODE_UDSEG 0x23
 
 static void print_ticks() {
     cprintf("%d ticks\n",TICK_NUM);
@@ -25,11 +33,13 @@ static void print_ticks() {
  * Must be built at run time because shifted function addresses can't
  * be represented in relocation records.
  * */
-static struct gatedesc idt[256] = {{0}};
+static struct gatedesc idt[N_INT] = {{0}};
 
 static struct pseudodesc idt_pd = {
     sizeof(idt) - 1, (uintptr_t)idt
 };
+
+extern uintptr_t __vectors[]; // entry addrs of each ISR
 
 /* idt_init - initialize IDT to each of the entry points in kern/trap/vectors.S */
 void
@@ -46,6 +56,16 @@ idt_init(void) {
       *     You don't know the meaning of this instruction? just google it! and check the libs/x86.h to know more.
       *     Notice: the argument of lidt is idt_pd. try to find it!
       */
+
+    for (int i = 0; i < N_INT; ++i) {
+        SETGATE(idt[i], 0, PROT_MODE_CSEG, __vectors[i], DPL_KERNEL);
+    }
+    // set DPL to DPL_USER to permit user to use `int 80`
+    SETGATE(idt[T_SYSCALL], 1, PROT_MODE_CSEG, __vectors[T_SYSCALL] , DPL_USER);
+    /* temporary open this int */
+    SETGATE(idt[T_SWITCH_TOK], 1, PROT_MODE_CSEG, __vectors[T_SWITCH_TOK] , DPL_USER);
+    // load IDT
+    lidt(&idt_pd);
 }
 
 static const char *
@@ -134,6 +154,39 @@ print_regs(struct pushregs *regs) {
     cprintf("  eax  0x%08x\n", regs->reg_eax);
 }
 
+static int do_switch_to_user(struct trapframe *tf) {
+    if (tf->tf_cs != USER_CS) {
+        tf->tf_ds = PROT_MODE_UDSEG;
+        tf->tf_es = PROT_MODE_UDSEG;
+        tf->tf_fs = PROT_MODE_UDSEG;
+        tf->tf_gs = PROT_MODE_UDSEG;
+        tf->tf_ss = PROT_MODE_UDSEG;
+        tf->tf_cs = PROT_MODE_UCSEG; /* Code Selector Here */
+        tf->tf_eflags &= ~FL_IOPL_MASK;
+        tf->tf_eflags |= FL_IOPL_3; /* set IOPL=3 to allow ring3 to access IO port */
+        return 0;
+    }
+    return 1;
+}
+
+static int do_switch_to_kernel(struct trapframe *tf) {
+    if (tf->tf_cs != KERNEL_CS) {
+        cprintf("Switching to kernel...\n");
+        tf->tf_ds = PROT_MODE_DSEG;
+        tf->tf_es = PROT_MODE_DSEG;
+        tf->tf_fs = PROT_MODE_DSEG;
+        tf->tf_gs = PROT_MODE_DSEG;
+        tf->tf_ss = PROT_MODE_DSEG;
+        tf->tf_cs = PROT_MODE_CSEG; /* Code Selector Here */
+        /* clear bits */
+        tf->tf_eflags &= ~FL_IOPL_MASK;
+        /* reset to IOPL=0 */
+        tf->tf_eflags |= FL_IOPL_0;
+        return 0;
+    }
+    return 1;
+}
+
 /* trap_dispatch - dispatch based on what type of trap occurred */
 static void
 trap_dispatch(struct trapframe *tf) {
@@ -147,10 +200,23 @@ trap_dispatch(struct trapframe *tf) {
          * (2) Every TICK_NUM cycle, you can print some info using a funciton, such as print_ticks().
          * (3) Too Simple? Yes, I think so!
          */
+        ticks++;
+        if (ticks % TICK_NUM == 0) {
+            print_ticks();
+        }
         break;
     case IRQ_OFFSET + IRQ_COM1:
         c = cons_getc();
         cprintf("serial [%03d] %c\n", c, c);
+        if (c == '0') {
+            if (!do_switch_to_kernel(tf)) {
+                print_trapframe(tf);
+            }
+        } else if (c == '3') {
+            if (!do_switch_to_user(tf)) {
+                print_trapframe(tf);
+            }
+        }
         break;
     case IRQ_OFFSET + IRQ_KBD:
         c = cons_getc();
@@ -158,19 +224,46 @@ trap_dispatch(struct trapframe *tf) {
         break;
     //LAB1 CHALLENGE 1 : YOUR CODE you should modify below codes.
     case T_SWITCH_TOU:
+        if (do_switch_to_user(tf)) {
+            panic("unexpected T_SWITCH_TOU in user space detected.\n");
+        }
+        break;
     case T_SWITCH_TOK:
-        panic("T_SWITCH_** ??\n");
+        if (do_switch_to_kernel(tf)) {
+            panic("unexpected T_SWITCH_TOK in user space detected.\n");
+        }
+        break;
+    case T_SYSCALL:
+        /* empty statment here to workaround */ ;
+        uint32_t eax = tf->tf_regs.reg_eax;
+        cprintf("[syscall] %%eax=0x%02x(%u)\n", eax, eax);
+        switch (eax) {
+        case 0xff:
+            tf->tf_regs.reg_eax = ticks;
+            cprintf("in kernel, ticks is %u\n", ticks);
+            break;
+        default:
+            panic("unexpected syscall %%eax=0x%02x(%u)\n", eax, eax);
+        }
         break;
     case IRQ_OFFSET + IRQ_IDE1:
     case IRQ_OFFSET + IRQ_IDE2:
         /* do nothing */
         break;
+    case T_GPFLT: /* general protection fault */
+        cprintf("General Protection Fault with errno 0x%08x\n", tf->tf_err);
+        panic("General Protection Fault\n");
+    break;
     default:
         // in kernel, it must be a mistake
         if ((tf->tf_cs & 3) == 0) {
             print_trapframe(tf);
             panic("unexpected trap in kernel.\n");
         }
+        uint32_t tn = tf->tf_trapno;
+        uint32_t en = tf->tf_err;
+        cprintf("Unexpected uncategoried trap 0x%08x(%u) with errno 0x%08x(%u)\n", tn, tn, en, en);
+        panic("Unexpected Uncategoried Trap\n");
     }
 }
 
