@@ -87,6 +87,7 @@ lab1_switch_to_user(void) {
      * 1) fix the bug that mov $$ss, the higher 16 bits are random.
      * 2) after int %0 should follow pop-ups.
      * 3) in trap.c, should modify esp & ss to user's stack. 
+     * 4) maybe bug: Am I free to use %%eax here?
      */
 
     /**
@@ -97,15 +98,17 @@ lab1_switch_to_user(void) {
      * 32: cs (and padding)
      * 32: eip
      */
+    //LAB1 CHALLENGE 1 : TODO
     __asm__ volatile(
-        "subl $0x8, %%esp \n\t"
-        "mov %%ss, 0x4(%%esp) \n\t"
-        "movl %%esp, (%%esp) \n\t"
+        "pushl %%eax \n\t"
+        "movl %%esp, %%eax \n\t"
+        "pushl %%ss \n\t"
+        "pushl %%eax \n\t"
         "int %0 \n\t"
+        "popl %%eax \n\t"
         : /* output */
         : "i"(T_SWITCH_TOU)
     );
-    //LAB1 CHALLENGE 1 : TODO
 }
 
 static void
