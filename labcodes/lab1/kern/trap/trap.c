@@ -194,6 +194,7 @@ trap_dispatch(struct trapframe *tf) {
         tf->tf_gs = PROT_MODE_UDSEG;
         tf->tf_ss = PROT_MODE_UDSEG;
         tf->tf_cs = PROT_MODE_UCSEG; /* Code Selector Here */
+        tf->tf_eflags |= FL_IOPL_3; /* set IOPL=3 to allow ring3 to access IO port */
         break;
     case T_SWITCH_TOK:
         panic("T_SWITCH_** ??\n");
