@@ -119,11 +119,19 @@ lab1_switch_to_kernel(void) {
 }
 
 static void
+trigger_gpf() {
+    __asm__ volatile(
+        "int $0x1 \n\t"
+    );
+}
+
+static void
 lab1_switch_test(void) {
     lab1_print_cur_status();
     cprintf("+++ switch to  user  mode +++\n");
     lab1_switch_to_user();
     lab1_print_cur_status();
+    // trigger_gpf();
     cprintf("+++ switch to kernel mode +++\n");
     lab1_switch_to_kernel();
     lab1_print_cur_status();

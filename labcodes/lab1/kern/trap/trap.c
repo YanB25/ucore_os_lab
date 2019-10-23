@@ -229,12 +229,20 @@ trap_dispatch(struct trapframe *tf) {
     case IRQ_OFFSET + IRQ_IDE2:
         /* do nothing */
         break;
+    case T_GPFLT: /* general protection fault */
+        cprintf("General Protection Fault with errno 0x%08x\n", tf->tf_err);
+        panic("General Protection Fault\n");
+    break;
     default:
         // in kernel, it must be a mistake
         if ((tf->tf_cs & 3) == 0) {
             print_trapframe(tf);
             panic("unexpected trap in kernel.\n");
         }
+        uint32_t tn = tf->tf_trapno;
+        uint32_t en = tf->tf_err;
+        cprintf("Unexpected uncategoried trap 0x%08x(%u) with errno 0x%08x(%u)\n", tn, tn, en, en);
+        panic("Unexpected Uncategoried Trap\n");
     }
 }
 

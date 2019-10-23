@@ -218,6 +218,9 @@ trap_dispatch(struct trapframe *tf) {
     case IRQ_OFFSET + IRQ_IDE2:
         /* do nothing */
         break;
+    case T_GPFLT: /* general protection fault */
+        panic("General Protection Fault with error code 0x%08x\n", tf->tf_err);
+        break;
     default:
         // in kernel, it must be a mistake
         if ((tf->tf_cs & 3) == 0) {
