@@ -122,6 +122,7 @@ default_init_memmap(struct Page *base, size_t n) {
 static struct Page *
 default_alloc_pages(size_t n) {
     assert(n > 0);
+    // cprintf("[debug] n: %u, nr_free: %u\n", n, nr_free);
     if (n > nr_free) {
         return NULL;
     }
@@ -138,11 +139,30 @@ default_alloc_pages(size_t n) {
         list_del(&(page->page_link));
         if (page->property > n) {
             struct Page *p = page + n;
+            assert(!PageReserved(p));
+
             p->property = page->property - n;
+            SetPageProperty(p);
             list_add(&free_list, &(p->page_link));
-    }
+        }
         nr_free -= n;
         ClearPageProperty(page);
+    }
+    if (page == NULL) {
+        cprintf("[MMU] alloc fails\n");
+    }
+    else if (n > 1) {
+        struct Page* end_page = page + n - 1;
+        ppn_t bppn = page2ppn(page);
+        ppn_t eppn = bppn + n - 1;
+        uintptr_t bpa = page2pa(page);
+        uintptr_t epa = page2pa(end_page);
+        cprintf("[MMU] alloc %u pages (%u-%u) @0x%08x - @0x%08x\n", n, bppn, eppn, bpa, epa);
+    } else {
+        assert(n == 1);
+        ppn_t ppn = page2ppn(page);
+        uintptr_t pa = page2pa(page);
+        cprintf("[MMU] alloc 1 page (%u) @0x%08x\n", ppn, pa);
     }
     return page;
 }
@@ -151,6 +171,7 @@ static void
 default_free_pages(struct Page *base, size_t n) {
     assert(n > 0);
     struct Page *p = base;
+    struct Page *back_page = base;
     for (; p != base + n; p ++) {
         assert(!PageReserved(p) && !PageProperty(p));
         p->flags = 0;
@@ -166,16 +187,48 @@ default_free_pages(struct Page *base, size_t n) {
             base->property += p->property;
             ClearPageProperty(p);
             list_del(&(p->page_link));
+            cprintf("   [MMU] freeing step: merging right pages %u\n", page2ppn(p));
         }
         else if (p + p->property == base) {
             p->property += base->property;
             ClearPageProperty(base);
             base = p;
             list_del(&(p->page_link));
+            cprintf("   [MMU] freeing step: merging left pages %u\n", page2ppn(p));
         }
     }
+
+    /* freeing report below */
+    if (n > 1) {
+        ppn_t bppn = page2ppn(back_page);
+        ppn_t eppn = bppn + n - 1;
+        intptr_t bpa = page2pa(back_page);
+        intptr_t epa = page2pa(back_page + n - 1);
+        cprintf("[MMU] free %u pages (%u-%u) @0x%08x - @0x%08x\n", n, bppn, eppn, bpa, epa);
+    } else {
+        ppn_t ppn = page2ppn(back_page);
+        intptr_t pa = page2pa(back_page);
+        cprintf("[MMU] free 1 page (%u) @0x%08x\n", ppn, pa);
+    }
+
     nr_free += n;
-    list_add(&free_list, &(base->page_link));
+    if (list_empty(&free_list)) {
+        list_add(&free_list, &(base->page_link));
+    } else {
+        list_entry_t *le = list_next(&free_list);
+        struct Page* cur_page = le2page(le, page_link);
+        while (cur_page < base && list_next(le) != &free_list) {
+            le = list_next(le);
+            cur_page = le2page(le, page_link);
+        }
+        assert(cur_page != base);
+        if (cur_page < base) {
+            list_add_after(le, &(base->page_link));
+        } else {
+            /* cur_age > base */
+            list_add_before(le, &(base->page_link));
+        }
+    }
 }
 
 static size_t
@@ -246,8 +299,12 @@ default_check(void) {
         count ++, total += p->property;
     }
     assert(total == nr_free_pages());
+    cprintf("MMU: free blocks: %u, free pages: %u\n", count, total);
 
+    /* gracefully restore all the state. */
     basic_check();
+
+    cprintf("finish basic_check for MMU\n");
 
     struct Page *p0 = alloc_pages(5), *p1, *p2;
     assert(p0 != NULL);

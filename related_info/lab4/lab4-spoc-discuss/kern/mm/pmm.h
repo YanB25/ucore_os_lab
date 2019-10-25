@@ -79,11 +79,13 @@ void print_pgdir(void);
 extern struct Page *pages;
 extern size_t npage;
 
+/* page2ppn return the index of a page in `pages` */
 static inline ppn_t
 page2ppn(struct Page *page) {
     return page - pages;
 }
 
+/* page2pa return the physical address of a page */
 static inline uintptr_t
 page2pa(struct Page *page) {
     return page2ppn(page) << PGSHIFT;

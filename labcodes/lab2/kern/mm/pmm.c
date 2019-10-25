@@ -32,6 +32,7 @@
 static struct taskstate ts = {0};
 
 // virtual address of physicall page array
+// pages was set to where larger than `end`
 struct Page *pages;
 // amount of physical memory (in pages)
 size_t npage = 0;
@@ -217,6 +218,7 @@ page_init(void) {
         SetPageReserved(pages + i);
     }
 
+    /* essentially return addr - KERNBASE */
     uintptr_t freemem = PADDR((uintptr_t)pages + sizeof(struct Page) * npage);
 
     for (i = 0; i < memmap->nr_map; i ++) {

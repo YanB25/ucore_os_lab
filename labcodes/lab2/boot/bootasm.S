@@ -43,7 +43,7 @@ seta20.2:
     movb $0xdf, %al                                 # 0xdf -> port 0x60
     outb %al, $0x60                                 # 0xdf = 11011111, means set P2's A20 bit(the 1 bit) to 1
 
-; we store the memory info into 0x8000
+# we store the memory info into 0x8000
 probe_memory:
     movl $0, 0x8000
     xorl %ebx, %ebx                                 # 0 for the first probe. An int for the probing count.
