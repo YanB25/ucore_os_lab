@@ -301,5 +301,17 @@ __memcpy(void *dst, const void *src, size_t n) {
 }
 #endif /* __HAVE_ARCH_MEMCPY */
 
+#define max(a,b) ({                   \
+    __typeof__ (a) _a = (a);          \
+    __typeof__ (b) _b = (b);          \
+    _a > _b ? _a : _b;                \
+})
+
+#define min(a,b) ({                   \
+    __typeof__ (a) _a = (a);          \
+    __typeof__ (b) _b = (b);          \
+    _a < _b ? _a : _b;                \
+})
+
 #endif /* !__LIBS_X86_H__ */
 
