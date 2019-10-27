@@ -255,6 +255,8 @@ struct taskstate {
 
 #define PTE_USER        (PTE_U | PTE_W | PTE_P)
 
+#define SET_PDE(pdep, pa, flags) (*pdep = ((pa & ~0x0FFF) | flags))
+
 /* Control Register flags */
 #define CR0_PE          0x00000001              // Protection Enable
 #define CR0_MP          0x00000002              // Monitor coProcessor

@@ -361,6 +361,35 @@ get_pte(pde_t *pgdir, uintptr_t la, bool create) {
     }
     return NULL;          // (8) return page table entry
 #endif
+    uint32_t pdx = PDX(la);
+    pde_t *pdep = &pgdir[pdx];
+    pte_t *pt = NULL; /* page table */
+
+    /* if page directory entry not exists */
+    if (!(*pdep & PTE_P)) {
+        if (create) {
+            struct Page* new_pd_page = alloc_page();
+            if (new_pd_page == NULL) {
+                return NULL; /* no memory */
+            }
+            set_page_ref(new_pd_page, 1);
+
+            uintptr_t pd_pa = page2pa(new_pd_page);
+            uintptr_t pd_la = (uintptr_t) KADDR(pd_pa);
+
+            pt = (pte_t *) pd_la; /* set newly alloc page's address to PT's address */
+            memset(pt, 0, PGSIZE);
+            SET_PDE(pdep, pd_pa, PTE_USER); /* use pa here */
+
+        } else {
+            return NULL;
+        }
+    } else {
+        /* pde exists */
+        pt = KADDR(PDE_ADDR(*pdep));
+    }
+    /* PT must exist here */
+    return pt + PTX(la);
 }
 
 //get_page - get related Page struct for linear address la using PDT pgdir
@@ -406,6 +435,17 @@ page_remove_pte(pde_t *pgdir, uintptr_t la, pte_t *ptep) {
                                   //(6) flush tlb
     }
 #endif
+    if (*ptep & PTE_P) {
+        struct Page* page = pte2page(*ptep);
+        page_ref_dec(page);
+        if (page_ref(page) == 0) {
+            /* this page should be freed */
+            free_page(page);
+        }
+        *ptep = 0;
+        tlb_invalidate(pgdir, la);
+    }
+
 }
 
 //page_remove - free an Page which is related linear address la and has an validated pte
