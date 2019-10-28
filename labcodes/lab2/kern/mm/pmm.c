@@ -198,14 +198,12 @@ page_init(void) {
     struct e820map *memmap = (struct e820map *)(0x8000 + KERNBASE);
     uint64_t maxpa = 0;
 
-    pmm_infof("e820map:\n");
+    cprintf("e820map:\n");
     int i;
     for (i = 0; i < memmap->nr_map; i ++) {
         uint64_t begin = memmap->map[i].addr, end = begin + memmap->map[i].size;
-        RAW_LOGGING
-        pmm_infof("  memory: %08llx, [%08llx, %08llx], type = %d.\n",
+        cprintf("  memory: %08llx, [%08llx, %08llx], type = %d.\n",
                 memmap->map[i].size, begin, end - 1, memmap->map[i].type);
-        ENDR
         if (memmap->map[i].type == E820_ARM) {
             if (maxpa < end && begin < KMEMSIZE) {
                 maxpa = end;
@@ -639,19 +637,17 @@ get_pgtable_items(size_t left, size_t right, size_t start, uintptr_t *table, siz
 //print_pgdir - print the PDT&PT
 void
 print_pgdir(void) {
-    RAW_LOGGING
-    pmm_infof("-------------------- BEGIN --------------------\n");
+    cprintf("-------------------- BEGIN --------------------\n");
     size_t left, right = 0, perm;
     while ((perm = get_pgtable_items(0, NPDEENTRY, right, vpd, &left, &right)) != 0) {
-        pmm_infof("PDE(%03x) %08x-%08x %08x %s\n", right - left,
+        cprintf("PDE(%03x) %08x-%08x %08x %s\n", right - left,
                 left * PTSIZE, right * PTSIZE, (right - left) * PTSIZE, perm2str(perm));
         size_t l, r = left * NPTEENTRY;
         while ((perm = get_pgtable_items(left * NPTEENTRY, right * NPTEENTRY, r, vpt, &l, &r)) != 0) {
-            pmm_infof("  |-- PTE(%05x) %08x-%08x %08x %s\n", r - l,
+            cprintf("  |-- PTE(%05x) %08x-%08x %08x %s\n", r - l,
                     l * PGSIZE, r * PGSIZE, (r - l) * PGSIZE, perm2str(perm));
         }
     }
-    pmm_infof("--------------------- END ---------------------\n");
-    ENDR
+    cprintf("--------------------- END ---------------------\n");
 }
 
