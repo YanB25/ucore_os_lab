@@ -127,6 +127,9 @@ write_dr(unsigned regnum, uint32_t value) {
 
 static inline void
 lidt(struct pseudodesc *pd) {
+    // LIDT m16&32
+    // `r` is a register whose value points to the pseudodesc.
+    // (%0) read the memory and retrieve the 6 bytes IDT limit and base.
     asm volatile ("lidt (%0)" :: "r" (pd) : "memory");
 }
 
@@ -297,6 +300,18 @@ __memcpy(void *dst, const void *src, size_t n) {
     return dst;
 }
 #endif /* __HAVE_ARCH_MEMCPY */
+
+#define max(a,b) ({                   \
+    __typeof__ (a) _a = (a);          \
+    __typeof__ (b) _b = (b);          \
+    _a > _b ? _a : _b;                \
+})
+
+#define min(a,b) ({                   \
+    __typeof__ (a) _a = (a);          \
+    __typeof__ (b) _b = (b);          \
+    _a < _b ? _a : _b;                \
+})
 
 #endif /* !__LIBS_X86_H__ */
 

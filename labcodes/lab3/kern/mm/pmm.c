@@ -5,11 +5,15 @@
 #include <mmu.h>
 #include <memlayout.h>
 #include <pmm.h>
-#include <default_pmm.h>
+#include <buddy_pmm.h>
 #include <sync.h>
 #include <error.h>
 #include <swap.h>
 #include <vmm.h>
+#include <logging.h>
+
+#define pmm_infof(fmt, ...) \
+    infof(PMM, fmt, ##__VA_ARGS__)
 
 /* *
  * Task State Segment:
@@ -34,6 +38,7 @@
 static struct taskstate ts = {0};
 
 // virtual address of physicall page array
+// pages was set to where larger than `end`
 struct Page *pages;
 // amount of physical memory (in pages)
 size_t npage = 0;
@@ -139,8 +144,9 @@ gdt_init(void) {
 //init_pmm_manager - initialize a pmm_manager instance
 static void
 init_pmm_manager(void) {
-    pmm_manager = &default_pmm_manager;
-    cprintf("memory management: %s\n", pmm_manager->name);
+    // pmm_manager = &default_pmm_manager;
+    pmm_manager = &buddy_pmm_manager;
+    pmm_infof("memory management: %s\n", pmm_manager->name);
     pmm_manager->init();
 }
 
@@ -230,6 +236,7 @@ page_init(void) {
         SetPageReserved(pages + i);
     }
 
+    /* essentially return addr - KERNBASE */
     uintptr_t freemem = PADDR((uintptr_t)pages + sizeof(struct Page) * npage);
 
     for (i = 0; i < memmap->nr_map; i ++) {
@@ -372,6 +379,35 @@ get_pte(pde_t *pgdir, uintptr_t la, bool create) {
     }
     return NULL;          // (8) return page table entry
 #endif
+    uint32_t pdx = PDX(la);
+    pde_t *pdep = &pgdir[pdx];
+    pte_t *pt = NULL; /* page table */
+
+    /* if page directory entry not exists */
+    if (!(*pdep & PTE_P)) {
+        if (create) {
+            struct Page* new_pd_page = alloc_page();
+            if (new_pd_page == NULL) {
+                return NULL; /* no memory */
+            }
+            set_page_ref(new_pd_page, 1);
+
+            uintptr_t pd_pa = page2pa(new_pd_page);
+            uintptr_t pd_la = (uintptr_t) KADDR(pd_pa);
+
+            pt = (pte_t *) pd_la; /* set newly alloc page's address to PT's address */
+            memset(pt, 0, PGSIZE);
+            SET_PDE(pdep, pd_pa, PTE_USER); /* use pa here */
+
+        } else {
+            return NULL;
+        }
+    } else {
+        /* pde exists */
+        pt = KADDR(PDE_ADDR(*pdep));
+    }
+    /* PT must exist here */
+    return pt + PTX(la);
 }
 
 //get_page - get related Page struct for linear address la using PDT pgdir
@@ -417,6 +453,17 @@ page_remove_pte(pde_t *pgdir, uintptr_t la, pte_t *ptep) {
                                   //(6) flush tlb
     }
 #endif
+    if (*ptep & PTE_P) {
+        struct Page* page = pte2page(*ptep);
+        page_ref_dec(page);
+        if (page_ref(page) == 0) {
+            /* this page should be freed */
+            free_page(page);
+        }
+        *ptep = 0;
+        tlb_invalidate(pgdir, la);
+    }
+
 }
 
 //page_remove - free an Page which is related linear address la and has an validated pte
@@ -492,7 +539,7 @@ pgdir_alloc_page(pde_t *pgdir, uintptr_t la, uint32_t perm) {
 static void
 check_alloc_page(void) {
     pmm_manager->check();
-    cprintf("check_alloc_page() succeeded!\n");
+    pmm_infof("check_alloc_page() succeeded!\n");
 }
 
 static void
@@ -540,7 +587,7 @@ check_pgdir(void) {
     free_page(pde2page(boot_pgdir[0]));
     boot_pgdir[0] = 0;
 
-    cprintf("check_pgdir() succeeded!\n");
+    pmm_infof("check_pgdir() succeeded!\n");
 }
 
 static void
@@ -574,7 +621,7 @@ check_boot_pgdir(void) {
     free_page(pde2page(boot_pgdir[0]));
     boot_pgdir[0] = 0;
 
-    cprintf("check_boot_pgdir() succeeded!\n");
+    pmm_infof("check_boot_pgdir() succeeded!\n");
 }
 
 //perm2str - use string 'u,r,w,-' to present the permission

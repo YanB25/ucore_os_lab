@@ -1,0 +1,2409 @@
+diff -r -u -P ../lab2.orin/boot/asm.h ./boot/asm.h
+--- ../lab2.orin/boot/asm.h	2019-10-28 16:21:56.456525501 +0800
++++ ./boot/asm.h	2019-10-28 16:22:01.866525660 +0800
+@@ -8,18 +8,38 @@
+     .word 0, 0;                                                 \
+     .byte 0, 0, 0, 0
+ 
++/**
++ * 0x90 -> 0b1001_0000
++ * the rightmost 1 for `always`, should be 1 for everything but TSS and LDT
++ * the leftmost 1 for `present`
++ * the middle `00` for DPL
++ * 
++ * 0xC0 -> 0b1100_0000
++ * the leftmost first 1 for gran=1, use 4k page addressing
++ * the left second 1 for big=1, 32bit opcodes for code, uint32_t stack for data
++ */
+ #define SEG_ASM(type,base,lim)                                  \
+     .word (((lim) >> 12) & 0xffff), ((base) & 0xffff);          \
+     .byte (((base) >> 16) & 0xff), (0x90 | (type)),             \
+         (0xC0 | (((lim) >> 28) & 0xf)), (((base) >> 24) & 0xff)
+ 
++/**
++ * NOTICE: no need for this macro, since GDT will be gracefully reloaded after init.
++ * set descriptor for user mode
++ * 0xf0 -> 0b1111_0000
++ * the middle `11` for DPL=3
++ */
++#define SEG_UASM(type,base,lim)                                  \
++    .word (((lim) >> 12) & 0xffff), ((base) & 0xffff);          \
++    .byte (((base) >> 16) & 0xff), (0xf0 | (type)),             \
++        (0xC0 | (((lim) >> 28) & 0xf)), (((base) >> 24) & 0xff)
+ 
+ /* Application segment type bits */
+ #define STA_X       0x8     // Executable segment
+-#define STA_E       0x4     // Expand down (non-executable segments)
+-#define STA_C       0x4     // Conforming code segment (executable only)
+-#define STA_W       0x2     // Writeable (non-executable segments)
+-#define STA_R       0x2     // Readable (executable segments)
++#define STA_E       0x4     // Expand down (for non-executable segments)
++#define STA_C       0x4     // Conforming code segment (for executable only)
++#define STA_W       0x2     // Writeable (for non-executable segments)
++#define STA_R       0x2     // Readable (for executable segments)
+ #define STA_A       0x1     // Accessed
+ 
+ #endif /* !__BOOT_ASM_H__ */
+diff -r -u -P ../lab2.orin/boot/bootasm.S ./boot/bootasm.S
+--- ../lab2.orin/boot/bootasm.S	2019-10-28 16:21:56.456525501 +0800
++++ ./boot/bootasm.S	2019-10-28 16:22:01.866525660 +0800
+@@ -43,28 +43,29 @@
+     movb $0xdf, %al                                 # 0xdf -> port 0x60
+     outb %al, $0x60                                 # 0xdf = 11011111, means set P2's A20 bit(the 1 bit) to 1
+ 
++# we store the memory info into 0x8000
+ probe_memory:
+     movl $0, 0x8000
+-    xorl %ebx, %ebx
+-    movw $0x8004, %di
++    xorl %ebx, %ebx                                 # 0 for the first probe. An int for the probing count.
++    movw $0x8004, %di                               # es:di the buffer address.
+ start_probe:
+-    movl $0xE820, %eax
+-    movl $20, %ecx
+-    movl $SMAP, %edx
++    movl $0xE820, %eax                              # int codes
++    movl $20, %ecx                                  # available buffer size. Required to be larger than 20
++    movl $SMAP, %edx                                # Magic Number, ascii for "SMAP"
+     int $0x15
+-    jnc cont
+-    movw $12345, 0x8000
++    jnc cont                                        # if `int 0x15` succeeds, CF is clear, so jump to cont.
++    movw $12345, 0x8000                             # `int 0x15` fails, write magic number and finish
+     jmp finish_probe
+ cont:
+     addw $20, %di
+     incl 0x8000
+-    cmpl $0, %ebx
++    cmpl $0, %ebx                                   # 0 if probe succeeds and finishes.
+     jnz start_probe
+ finish_probe:
+ 
+     # Switch from real to protected mode, using a bootstrap GDT
+     # and segment translation that makes virtual addresses
+-    # identical to physical addresses, so that the
++    # **identical** to physical addresses, so that the
+     # effective memory map does not change during the switch.
+     lgdt gdtdesc
+     movl %cr0, %eax
+diff -r -u -P ../lab2.orin/kern/debug/kdebug.c ./kern/debug/kdebug.c
+--- ../lab2.orin/kern/debug/kdebug.c	2019-10-28 16:21:56.456525501 +0800
++++ ./kern/debug/kdebug.c	2019-10-28 16:22:01.866525660 +0800
+@@ -296,7 +296,7 @@
+      /* LAB1 YOUR CODE : STEP 1 */
+      /* (1) call read_ebp() to get the value of ebp. the type is (uint32_t);
+       * (2) call read_eip() to get the value of eip. the type is (uint32_t);
+-      * (3) from 0 .. STACKFRAME_DEPTH
++      * (3) from 0 .. STACKFRAME_DEkPTH
+       *    (3.1) printf value of ebp, eip
+       *    (3.2) (uint32_t)calling arguments [0..4] = the contents in address (uint32_t)ebp +2 [0..4]
+       *    (3.3) cprintf("\n");
+@@ -305,5 +305,17 @@
+       *           NOTICE: the calling funciton's return addr eip  = ss:[ebp+4]
+       *                   the calling funciton's ebp = ss:[ebp]
+       */
++    uint32_t ebp = read_ebp();
++    uint32_t eip = read_eip();
++    int _depth = 0;
++    while (ebp != 0 && _depth++ < STACKFRAME_DEPTH) {
++        cprintf("ebp:0x%08x eip:0x%08x ", ebp, eip);
++        uint32_t* args = ((uint32_t*) ebp) + 2;
++        cprintf("args: 0x%08x 0x%08x 0x%08x 0x%08x\n", args[0], args[1], args[2], args[3]);
++        print_debuginfo(eip - 1);
++        eip = *(((uint32_t*) ebp) + 1);
++        ebp = *((uint32_t*) ebp);
++    }
++
+ }
+ 
+diff -r -u -P ../lab2.orin/kern/init/init.c ./kern/init/init.c
+--- ../lab2.orin/kern/init/init.c	2019-10-28 16:21:56.459858835 +0800
++++ ./kern/init/init.c	2019-10-28 16:22:01.866525660 +0800
+@@ -38,7 +38,7 @@
+ 
+     //LAB1: CAHLLENGE 1 If you try to do it, uncomment lab1_switch_test()
+     // user/kernel mode switch test
+-    //lab1_switch_test();
++    // lab1_switch_test();
+ 
+     /* do nothing */
+     while (1);
+@@ -85,11 +85,57 @@
+ static void
+ lab1_switch_to_user(void) {
+     //LAB1 CHALLENGE 1 : TODO
++    /**
++     * Stack: Low address -> High address
++     * 32: ss (and padding)
++     * 32: esp
++     * 32: eflags
++     * 32: cs (and padding)
++     * 32: eip
++     */
++    __asm__ volatile(
++        "movl %%esp, %%eax \n\t"
++        "pushl %%ss \n\t"
++        "pushl %%eax \n\t"
++        "int %0 \n\t"
++        : /* output */
++        : "i"(T_SWITCH_TOU)
++    );
+ }
+ 
+ static void
+ lab1_switch_to_kernel(void) {
+     //LAB1 CHALLENGE 1 :  TODO
++    /**
++     * TSS works here and change ss:esp to `stack0` when int 0x70.
++     * After the interrupt, ss:esp should be manually set to the origin value.
++     */
++    __asm__ volatile(
++        "int %0 \n\t"
++        "movw 0x4(%%esp), %%ss \n\t"
++        "popl %%esp \n\t"
++        : /* output */
++        : "i"(T_SWITCH_TOK)
++    );
++}
++
++static void
++trigger_gpf() {
++    __asm__ volatile(
++        "int $0x1 \n\t"
++    );
++}
++
++static uint32_t
++get_ticks() {
++    uint32_t __ticks;
++    __asm__ volatile(
++        "movl $0xff, %%eax \n\t"
++        "int $0x80 \n\t"
++        : "=a"(__ticks)
++        : /* empty input */
++    );
++    return __ticks;
+ }
+ 
+ static void
+@@ -98,6 +144,9 @@
+     cprintf("+++ switch to  user  mode +++\n");
+     lab1_switch_to_user();
+     lab1_print_cur_status();
++    // trigger_gpf(); /* trigger general protection fault pass test */
++    uint32_t _ticks = get_ticks();
++    cprintf("Get ticks %u in user mode\n", _ticks);
+     cprintf("+++ switch to kernel mode +++\n");
+     lab1_switch_to_kernel();
+     lab1_print_cur_status();
+diff -r -u -P ../lab2.orin/kern/libs/logging.c ./kern/libs/logging.c
+--- ../lab2.orin/kern/libs/logging.c	1970-01-01 08:00:00.000000000 +0800
++++ ./kern/libs/logging.c	2019-10-28 16:22:01.866525660 +0800
+@@ -0,0 +1,10 @@
++#include <defs.h>
++#include <console.h>
++#include <stdio.h>
++#include <logging.h>
++
++const char* LOGGING_LEVEL_PRT[] = {
++    "DEBUG", "INFO", "WARNING", "ERROR", "PANIC"
++};
++
++const uint8_t __logging_raw_cnt_mg_flg__ = 0;
+\ No newline at end of file
+diff -r -u -P ../lab2.orin/kern/mm/buddy_pmm.c ./kern/mm/buddy_pmm.c
+--- ../lab2.orin/kern/mm/buddy_pmm.c	1970-01-01 08:00:00.000000000 +0800
++++ ./kern/mm/buddy_pmm.c	2019-10-28 16:22:01.866525660 +0800
+@@ -0,0 +1,347 @@
++#include <pmm.h>
++#include <string.h>
++#include <buddy_pmm.h>
++#include <x86.h>
++#include <stdio.h>
++#include <logging.h>
++
++static struct buddy_pmm_meta pmm_meta;
++
++#define buddy_nr_free (pmm_meta.nr_free)
++#define buddy_rollup_nr_free (pmm_meta.rollup_nr_free)
++#define cont (pmm_meta.cont_log2)
++#define alloctree_init (pmm_meta.alloctree_init)
++
++/* define logging macros */
++#define mmu_debugf(fmt, ...) debugf(MMU, fmt, ##__VA_ARGS__)
++#define mmu_warnf(fmt, ...) warnf(MMU, fmt, ##__VA_ARGS__)
++#define mmu_infof(fmt, ...) infof(MMU, fmt, ##__VA_ARGS__)
++#define mmu_errorf(fmt, ...) errorf(MMU, fmt, ##__VA_ARGS__)
++#define mmu_panicf(fmt, ...) panicf(MMU, fmt, ##__VA_ARGS__)
++
++static inline void
++report(struct Page* page, size_t n, char* str) {
++    if (page == NULL) {
++        mmu_infof("%s\nPage Fault: NULL %u page(s)\n", str, n);
++        return;
++    }
++    struct Page *beg = page, *end = page + n - 1;
++    uint32_t nbeg = page2ppn(beg), nend = page2ppn(end);
++    uintptr_t beg_addr = page2pa(beg), end_addr = page2pa(end);
++    if (n == 1) {
++        mmu_infof("%s\n%u page(%u) @0x%08x\n", str, n, nbeg, beg_addr);
++    } else {
++        mmu_infof("%s\n%u pages(%u - %u) @0x%08x - @0x%08x\n", str, n, nbeg, nend, beg_addr, end_addr);
++    }
++}
++
++static void
++buddy_pmm_init(void) {
++    buddy_nr_free = 0;
++    buddy_rollup_nr_free = 0;
++    alloctree_init = 0; /* not init until first alloc. */
++    cont[0] = 0;
++}
++
++static void 
++buddy_init_memmap(struct Page* base, size_t n) {
++    /* reporting */
++    assert(n > 0);
++
++    report(base, n, "buddy_init_memmap");
++    pmm_meta.pnn_offset = page2ppn(base);
++
++    for (struct Page* p = base; p != base + n; p++) {
++        assert(PageReserved(p));
++        p->flags = p->property = 0;
++        set_page_ref(p, 0);
++    }
++    buddy_nr_free += n;
++}
++
++static void
++do_init_alloctree(size_t idx, uint32_t ncap, uint32_t nfree) {
++    if (ncap == 0) return;
++
++    uint32_t next_cap = ncap / 2;
++    uint32_t lfree = min(nfree, next_cap);
++    uint32_t rfree = nfree - lfree;
++
++    cont[idx] = nfree;
++    do_init_alloctree(LEFT(idx), next_cap, lfree);
++    do_init_alloctree(RIGHT(idx), next_cap, rfree);
++}
++
++static void
++buddy_init_alloctree(void) {
++    alloctree_init = 1;
++
++    buddy_rollup_nr_free = ROLLUP_POW2(buddy_nr_free);
++    mmu_debugf("nr_free = %u, roll up nr_free = %u\n", buddy_nr_free, buddy_rollup_nr_free);
++    do_init_alloctree(1, buddy_rollup_nr_free, buddy_nr_free);
++
++    RAW_LOGGING
++    mmu_infof("showing cont info ...\n");
++    for (int i = 1; i < 20; ++i) {
++        mmu_infof("%d:%u ", i, cont[i]);
++    }
++    mmu_infof("\n");
++    ENDR
++}
++
++static struct Page*
++do_alloc_pages(size_t idx, size_t n) {
++    assert(idx > 0 && idx < BUDDY_NPG);
++    RAW_LOGGING mmu_debugf("calling alloc pages, idx=%u, cont=%u\n", idx, cont[idx]); ENDR
++
++    /* quick match */
++    if (idx2nodesize(idx) == n && !USED(idx)) {
++        cont[idx] = 0;
++        return idx2page(idx);
++    }
++    /* early stop */
++    if (cont[idx] < n) {
++        return NULL;
++    }
++
++    assert(cont[idx] >= n);
++
++    struct Page* lpage = do_alloc_pages(LEFT(idx), n);
++    if (lpage) {
++        cont[idx] = max(cont[LEFT(idx)], cont[RIGHT(idx)]);
++        return lpage;
++    }
++    struct Page* rpage = do_alloc_pages(RIGHT(idx), n);
++    if (rpage) {
++        cont[idx] = max(cont[LEFT(idx)], cont[RIGHT(idx)]);
++        return rpage;
++    }
++    assert(0); /* never reach here */
++    return NULL;
++}
++
++
++static struct Page *
++buddy_alloc_pages(size_t n) {
++    if (!alloctree_init) {
++        buddy_init_alloctree();
++    }
++    uint32_t rollup_n = ROLLUP_POW2(n);
++    mmu_debugf("start to do alloc page(s)\n");
++    struct Page* p = do_alloc_pages(HEAD, rollup_n);
++    report(p, rollup_n, "buddy_alloc_pages");
++    return p;
++}
++
++static void
++do_free_pages_backwords(size_t idx) {
++    assert(idx > 0 && idx < BUDDY_NPG);
++    if (!last_layer(idx)) {
++        if (NOT_USED(LEFT(idx)) && NOT_USED(RIGHT(idx))) {
++            cont[idx] = cont[LEFT(idx)] + cont[RIGHT(idx)];
++        } else {
++            cont[idx] = max(cont[LEFT(idx)], cont[RIGHT(idx)]);
++        }
++    }
++    RAW_LOGGING mmu_debugf("backwords with idx=%u, cont=%u\n", idx, cont[idx]); ENDR
++    if (!first_layer(idx)) {
++        do_free_pages_backwords(PAR(idx));
++    }
++}
++
++
++/**
++ * buddy_free_pages REQUIRED allocs and frees in the EXACTLY
++ * symmetrical way.
++ * e.g. not allow to allc(2), alloc(2) then free(4).
++ */
++static void
++buddy_free_pages(struct Page* base, size_t n) {
++    assert(alloctree_init);
++
++    if (base == NULL || n == 0) return;
++    assert(n > 0);
++
++    uint32_t rollup_n = ROLLUP_POW2(n);
++
++    mmu_debugf("nodesize=%u, depth=%u, debug=%u, fst=%u, buddy_rullup_nr_free=%u\n", rollup_n, nodesize2depth(rollup_n), buddy_rollup_nr_free/rollup_n, nodesize2fstidx(rollup_n), buddy_rollup_nr_free);
++
++    bool found = 0;
++    size_t cur_idx = HEAD;
++    ppn_t bppn = page2ppn(base);
++    while (!out_of_range(cur_idx)) {
++        uint32_t nodesize = idx2nodesize(cur_idx);
++        ppn_t ppn = idx2ppn(cur_idx);
++        RAW_LOGGING 
++        mmu_debugf("searching idx=%u, n=%u, bppn=%u, nodesize=%u, ppn=%u\n", cur_idx, n, bppn, nodesize, ppn); ENDR
++        if (nodesize == n && ppn == bppn) {
++            /* parameter match */
++            if (cont[cur_idx] == 0) {
++                mmu_debugf("freeing %u, backward...\n", cur_idx);
++                cont[cur_idx] = n;
++                do_free_pages_backwords(cur_idx);
++                found = 1;
++                break;
++            } else {
++                mmu_warnf("WARN: cont[cur_idx]=%u not ZERO\n", cont[cur_idx]);
++            }
++        } else if (idx2ppn(RIGHT(cur_idx)) > bppn) {
++            assert(idx2ppn(LEFT(cur_idx)) <= bppn);
++            cur_idx = LEFT(cur_idx);
++        } else {
++            /* idx2ppn(RIGHT(idx)) <= ppn */
++            cur_idx = RIGHT(cur_idx);
++        }
++    }
++
++    RAW_LOGGING mmu_debugf("end\n"); ENDR
++    if (!found) {
++        report(base, rollup_n, "WARN, fails to free pages.");
++    } else {
++        report(base, rollup_n, "buddy_free_pages.");
++    }
++
++}
++
++static size_t
++buddy_nr_free_pages(void) {
++    return buddy_nr_free;
++}
++
++static void
++one_page_check(void) {
++    uint32_t nr_free_store = buddy_nr_free;
++    buddy_nr_free = 16;
++    struct Page *p0, *p1, *p2;
++    p0 = p1 = p2 = NULL;
++    assert((p0 = alloc_page()) != NULL);
++    assert((p1 = alloc_page()) != NULL);
++    assert((p2 = alloc_page()) != NULL);
++    mmu_debugf("now freeing ...\n");
++
++    free_page(p1);
++    free_page(p0);
++    free_page(p2);
++
++    struct Page* page[16];
++    for (int i = 0; i < 16; ++i) {
++        assert((page[i] = alloc_page()) != NULL);
++    }
++    assert(alloc_page() == NULL);
++    for (int i = 0; i < 16; ++i) {
++        free_page(page[i]);
++    }
++
++    mmu_debugf("+++++++ MMU reset ++++++++\n");
++    alloctree_init = 0;
++    buddy_nr_free = nr_free_store;
++}
++
++static void
++pages_check() {
++    mmu_debugf("++++++++ starting pages check +++++++++\n");
++    uint32_t nr_free_store = buddy_nr_free;
++    buddy_nr_free = 16;
++
++    struct Page *p0, *p1, *p2, *p3;
++    assert((p0 = alloc_pages(16)) != NULL);
++    assert(alloc_page() == NULL);
++    free_pages(p0, 16);
++
++    assert((p0 = alloc_pages(8)) != NULL);
++    assert((p1 = alloc_pages(8)) != NULL);
++    assert(alloc_page() == NULL);
++    free_pages(p0, 8);
++    free_pages(p1, 8);
++
++    struct Page* page[8];
++    for (int i = 0; i < 8; ++i) {
++        assert((page[i] = alloc_pages(2)) != NULL);
++    }
++    assert(alloc_page() == NULL);
++    for (int i = 0; i < 8; ++i) {
++        free_pages(page[i], 2);
++    }
++    mmu_debugf("--------- MMU reset --------\n");
++    alloctree_init = 0;
++    buddy_nr_free = nr_free_store;
++}
++
++static void
++random_alloc_check(void) {
++    mmu_debugf("+++++++ starting random_alloc_check ++++++++\n");
++    uint32_t nr_free_store = buddy_nr_free;
++    buddy_nr_free = 16;
++
++    struct Page *p0, *p1, *p2;
++    assert((p0 = alloc_pages(7)) != NULL);
++    assert((p1 = alloc_pages(3)) != NULL);
++    struct Page* page[4];
++    for (int i = 0; i < 4; ++i) {
++        assert((page[i] = alloc_page()) != NULL);
++    }
++    assert(alloc_page() == NULL);
++
++    free_pages(p1, 3);
++    free_pages(p0, 7);
++    for (int i = 0; i < 4; ++i) {
++        free_page(page[i]);
++    }
++    mmu_debugf("--------- MMU reset --------\n");
++    alloctree_init = 0;
++    buddy_nr_free = nr_free_store;
++}
++
++static void
++rollup_alloc_check(void) {
++    uint32_t nr_free_store = buddy_nr_free;
++    buddy_nr_free = 9;
++    mmu_debugf("+++++++ starting rollup_alloc_check ++++++++\n");
++
++    struct Page *p0, *p1, *p2;
++    assert((p0 = alloc_pages(8)) != NULL);
++    assert((p1 = alloc_page()) != NULL);
++    assert(alloc_page() == NULL);
++    free_page(p1);
++    free_pages(p0, 8);
++
++    assert((p0 = alloc_pages(4)) != NULL);
++    assert((p1 = alloc_pages(4)) != NULL);
++    assert((p2 = alloc_page()) != NULL);
++    assert(alloc_page() == NULL);
++    free_pages(p1, 4);
++    free_page(p2);
++    free_pages(p0, 4);
++
++    struct Page* page[9];
++    for (int i = 0; i < 9; ++i) {
++        assert((page[i] = alloc_page()) != NULL);
++    }
++    assert(alloc_page() == NULL);
++
++    for (int i = 8; i >= 0; --i) {
++        free_page(page[i]);
++    }
++
++    mmu_debugf("--------- MMU reset --------\n");
++    alloctree_init = 0;
++    buddy_nr_free = nr_free_store;
++}
++
++static void
++buddy_pmm_check(void) {
++    one_page_check();
++    pages_check();
++    random_alloc_check();
++    rollup_alloc_check();
++}
++
++const struct pmm_manager buddy_pmm_manager = {
++    .name = "buddy_pmm_manager",
++    .init = buddy_pmm_init,
++    .init_memmap = buddy_init_memmap,
++    .alloc_pages = buddy_alloc_pages,
++    .free_pages = buddy_free_pages,
++    .nr_free_pages = buddy_nr_free_pages,
++    .check = buddy_pmm_check,
++};
+\ No newline at end of file
+diff -r -u -P ../lab2.orin/kern/mm/buddy_pmm.h ./kern/mm/buddy_pmm.h
+--- ../lab2.orin/kern/mm/buddy_pmm.h	1970-01-01 08:00:00.000000000 +0800
++++ ./kern/mm/buddy_pmm.h	2019-10-28 16:22:01.866525660 +0800
+@@ -0,0 +1,84 @@
++#ifndef __KERN_MM_BUDDY_PMM_H__
++#define __KERN_MM_BUDDY_PMM_H__
++
++#include <pmm.h>
++#include <memlayout.h>
++
++#define BUDDY_NPG (KMEMSIZE / PGSIZE)
++
++/**
++ *  LM1 return the position(n-th bit) of the left most 1-bit 
++ *  NOTICE: only work for an uint32_t
++ */
++#define LM1(u) ({                                              \
++    __typeof__ (u) __lm1_u = u;                                \
++    if (__lm1_u == 0) {                                        \
++        panic("call __builtin_clz for 0\n");                   \
++    }                                                          \
++    (32 - __builtin_clz(__lm1_u));                             \
++})
++
++/* roll an uint32_t up to a power of two */
++#define ROLLUP_POW2(u) ({                                      \
++    __typeof__ (u) __rollup_pow2_u = u - 1;                    \
++    uint32_t __rollup_pow2_res;                                \
++    if (u == 1) {                                              \
++        __rollup_pow2_res = 1;                                 \
++    } else {                                                   \
++        __typeof__ (u) __shft = LM1(__rollup_pow2_u);          \
++        __rollup_pow2_res = (1 << __shft);                     \
++    }                                                          \
++    __rollup_pow2_res;                                         \
++})
++
++#define HEAD (1)
++#define LEFT(idx) (idx * 2)
++#define RIGHT(idx) (idx * 2 + 1)
++#define PAR(idx) (idx / 2)
++#define BRO(idx) (idx ^ 0x1)
++
++#define USED(idx) (cont[idx] == 0)
++#define NOT_USED(idx) (cont[idx] == idx2nodesize(idx))
++
++/** 
++ * idx2depth calculate the depth of idx-node.
++ * the root has depth 1 and idx 1.
++ */
++#define idx2depth(idx) (LM1(idx))
++#define depth2nodesize(depth) (buddy_rollup_nr_free / (1 << (depth - 1)))
++#define idx2nodesize(idx) (depth2nodesize(idx2depth(idx)))
++
++#define depth2fstidx(depth) (1 << (depth - 1))
++#define max_depth (LM1(buddy_rollup_nr_free))
++// TODO: critical bug below
++#define nodesize2depth(nodesize) (max_depth + 1 - LM1(nodesize)) 
++#define nodesize2fstidx(nodesize) (depth2fstidx(nodesize2depth(nodesize)))
++
++/** 
++ * idx2lgppn convert an idx to the logic page number.
++ * the lgppn starts from 0
++ */
++#define idx2lgppn(idx) (idx * idx2nodesize(idx) - buddy_rollup_nr_free)
++#define lgppn2ppn(lgppn) (lgppn + pmm_meta.pnn_offset)
++#define idx2ppn(idx) (lgppn2ppn(idx2lgppn(idx)))
++#define idx2page(idx) ((idx2ppn(idx) + pages))
++
++#define page2lgppn(page) (ppn2lgppn(page2ppn(page)))
++#define ppn2lgppn(ppn) (ppn - pmm_meta.pnn_offset)
++
++#define first_layer(idx) (idx == HEAD)
++#define last_layer(idx) (idx >= buddy_rollup_nr_free)
++#define out_of_range(idx) (idx >= 2 * buddy_rollup_nr_free)
++
++
++extern const struct pmm_manager buddy_pmm_manager;
++
++struct buddy_pmm_meta{
++    bool alloctree_init;
++    uint32_t nr_free;
++    uint32_t rollup_nr_free;
++    uint32_t cont_log2[BUDDY_NPG + 1];
++    uint32_t pnn_offset; /* lgppn + ppn_offset = ppn (phy ppn) */
++};
++
++#endif /* !	__KERN_MM_BUDDY_PMM_H__ */
+\ No newline at end of file
+diff -r -u -P ../lab2.orin/kern/mm/default_pmm.c ./kern/mm/default_pmm.c
+--- ../lab2.orin/kern/mm/default_pmm.c	2019-10-28 16:21:56.459858835 +0800
++++ ./kern/mm/default_pmm.c	2019-10-28 16:22:01.866525660 +0800
+@@ -122,6 +122,7 @@
+ static struct Page *
+ default_alloc_pages(size_t n) {
+     assert(n > 0);
++    // cprintf("[debug] n: %u, nr_free: %u\n", n, nr_free);
+     if (n > nr_free) {
+         return NULL;
+     }
+@@ -138,12 +139,31 @@
+         list_del(&(page->page_link));
+         if (page->property > n) {
+             struct Page *p = page + n;
++            assert(!PageReserved(p));
++
+             p->property = page->property - n;
++            SetPageProperty(p);
+             list_add(&free_list, &(p->page_link));
+-    }
++        }
+         nr_free -= n;
+         ClearPageProperty(page);
+     }
++    if (page == NULL) {
++        cprintf("[MMU] alloc fails\n");
++    }
++    else if (n > 1) {
++        struct Page* end_page = page + n - 1;
++        ppn_t bppn = page2ppn(page);
++        ppn_t eppn = bppn + n - 1;
++        uintptr_t bpa = page2pa(page);
++        uintptr_t epa = page2pa(end_page);
++        cprintf("[MMU] alloc %u pages (%u-%u) @0x%08x - @0x%08x\n", n, bppn, eppn, bpa, epa);
++    } else {
++        assert(n == 1);
++        ppn_t ppn = page2ppn(page);
++        uintptr_t pa = page2pa(page);
++        cprintf("[MMU] alloc 1 page (%u) @0x%08x\n", ppn, pa);
++    }
+     return page;
+ }
+ 
+@@ -151,6 +171,7 @@
+ default_free_pages(struct Page *base, size_t n) {
+     assert(n > 0);
+     struct Page *p = base;
++    struct Page *back_page = base;
+     for (; p != base + n; p ++) {
+         assert(!PageReserved(p) && !PageProperty(p));
+         p->flags = 0;
+@@ -166,16 +187,48 @@
+             base->property += p->property;
+             ClearPageProperty(p);
+             list_del(&(p->page_link));
++            cprintf("   [MMU] freeing step: merging right pages %u\n", page2ppn(p));
+         }
+         else if (p + p->property == base) {
+             p->property += base->property;
+             ClearPageProperty(base);
+             base = p;
+             list_del(&(p->page_link));
++            cprintf("   [MMU] freeing step: merging left pages %u\n", page2ppn(p));
+         }
+     }
++
++    /* freeing report below */
++    if (n > 1) {
++        ppn_t bppn = page2ppn(back_page);
++        ppn_t eppn = bppn + n - 1;
++        intptr_t bpa = page2pa(back_page);
++        intptr_t epa = page2pa(back_page + n - 1);
++        cprintf("[MMU] free %u pages (%u-%u) @0x%08x - @0x%08x\n", n, bppn, eppn, bpa, epa);
++    } else {
++        ppn_t ppn = page2ppn(back_page);
++        intptr_t pa = page2pa(back_page);
++        cprintf("[MMU] free 1 page (%u) @0x%08x\n", ppn, pa);
++    }
++
+     nr_free += n;
+-    list_add(&free_list, &(base->page_link));
++    if (list_empty(&free_list)) {
++        list_add(&free_list, &(base->page_link));
++    } else {
++        list_entry_t *le = list_next(&free_list);
++        struct Page* cur_page = le2page(le, page_link);
++        while (cur_page < base && list_next(le) != &free_list) {
++            le = list_next(le);
++            cur_page = le2page(le, page_link);
++        }
++        assert(cur_page != base);
++        if (cur_page < base) {
++            list_add_after(le, &(base->page_link));
++        } else {
++            /* cur_age > base */
++            list_add_before(le, &(base->page_link));
++        }
++    }
+ }
+ 
+ static size_t
+@@ -246,9 +299,13 @@
+         count ++, total += p->property;
+     }
+     assert(total == nr_free_pages());
++    cprintf("MMU: free blocks: %u, free pages: %u\n", count, total);
+ 
++    /* gracefully restore all the state. */
+     basic_check();
+ 
++    cprintf("finish basic_check for MMU\n");
++
+     struct Page *p0 = alloc_pages(5), *p1, *p2;
+     assert(p0 != NULL);
+     assert(!PageProperty(p0));
+diff -r -u -P ../lab2.orin/kern/mm/mmu.h ./kern/mm/mmu.h
+--- ../lab2.orin/kern/mm/mmu.h	2019-10-28 16:21:56.459858835 +0800
++++ ./kern/mm/mmu.h	2019-10-28 16:22:01.869858993 +0800
+@@ -95,6 +95,14 @@
+         (gate).gd_off_31_16 = (uint32_t)(off) >> 16;        \
+     }
+ 
++/**
++ * Return a selector for GDT/LDT
++ *   - rpl: Request priviledge level
++ *   - ti: Table indicator. 0 for GDT and 1 for LDT
++ *   - idx: Index
++ */
++#define SETSEL(rpl, ti, idx) ( (rpl & 0b11) + ((ti & 1) << 2) + (rpl & 0x1fff) << 3)
++
+ /* Set up a call gate descriptor */
+ #define SETCALLGATE(gate, ss, off, dpl) {                   \
+         (gate).gd_off_15_0 = (uint32_t)(off) & 0xffff;      \
+@@ -247,6 +255,8 @@
+ 
+ #define PTE_USER        (PTE_U | PTE_W | PTE_P)
+ 
++#define SET_PDE(pdep, pa, flags) (*pdep = ((pa & ~0x0FFF) | flags))
++
+ /* Control Register flags */
+ #define CR0_PE          0x00000001              // Protection Enable
+ #define CR0_MP          0x00000002              // Monitor coProcessor
+diff -r -u -P ../lab2.orin/kern/mm/pmm.c ./kern/mm/pmm.c
+--- ../lab2.orin/kern/mm/pmm.c	2019-10-28 16:21:56.459858835 +0800
++++ ./kern/mm/pmm.c	2019-10-28 16:22:01.869858993 +0800
+@@ -5,9 +5,13 @@
+ #include <mmu.h>
+ #include <memlayout.h>
+ #include <pmm.h>
+-#include <default_pmm.h>
++#include <buddy_pmm.h>
+ #include <sync.h>
+ #include <error.h>
++#include <logging.h>
++
++#define pmm_infof(fmt, ...) \
++    infof(PMM, fmt, ##__VA_ARGS__)
+ 
+ /* *
+  * Task State Segment:
+@@ -32,6 +36,7 @@
+ static struct taskstate ts = {0};
+ 
+ // virtual address of physicall page array
++// pages was set to where larger than `end`
+ struct Page *pages;
+ // amount of physical memory (in pages)
+ size_t npage = 0;
+@@ -137,8 +142,9 @@
+ //init_pmm_manager - initialize a pmm_manager instance
+ static void
+ init_pmm_manager(void) {
+-    pmm_manager = &default_pmm_manager;
+-    cprintf("memory management: %s\n", pmm_manager->name);
++    // pmm_manager = &default_pmm_manager;
++    pmm_manager = &buddy_pmm_manager;
++    pmm_infof("memory management: %s\n", pmm_manager->name);
+     pmm_manager->init();
+ }
+ 
+@@ -217,6 +223,7 @@
+         SetPageReserved(pages + i);
+     }
+ 
++    /* essentially return addr - KERNBASE */
+     uintptr_t freemem = PADDR((uintptr_t)pages + sizeof(struct Page) * npage);
+ 
+     for (i = 0; i < memmap->nr_map; i ++) {
+@@ -359,6 +366,35 @@
+     }
+     return NULL;          // (8) return page table entry
+ #endif
++    uint32_t pdx = PDX(la);
++    pde_t *pdep = &pgdir[pdx];
++    pte_t *pt = NULL; /* page table */
++
++    /* if page directory entry not exists */
++    if (!(*pdep & PTE_P)) {
++        if (create) {
++            struct Page* new_pd_page = alloc_page();
++            if (new_pd_page == NULL) {
++                return NULL; /* no memory */
++            }
++            set_page_ref(new_pd_page, 1);
++
++            uintptr_t pd_pa = page2pa(new_pd_page);
++            uintptr_t pd_la = (uintptr_t) KADDR(pd_pa);
++
++            pt = (pte_t *) pd_la; /* set newly alloc page's address to PT's address */
++            memset(pt, 0, PGSIZE);
++            SET_PDE(pdep, pd_pa, PTE_USER); /* use pa here */
++
++        } else {
++            return NULL;
++        }
++    } else {
++        /* pde exists */
++        pt = KADDR(PDE_ADDR(*pdep));
++    }
++    /* PT must exist here */
++    return pt + PTX(la);
+ }
+ 
+ //get_page - get related Page struct for linear address la using PDT pgdir
+@@ -404,6 +440,17 @@
+                                   //(6) flush tlb
+     }
+ #endif
++    if (*ptep & PTE_P) {
++        struct Page* page = pte2page(*ptep);
++        page_ref_dec(page);
++        if (page_ref(page) == 0) {
++            /* this page should be freed */
++            free_page(page);
++        }
++        *ptep = 0;
++        tlb_invalidate(pgdir, la);
++    }
++
+ }
+ 
+ //page_remove - free an Page which is related linear address la and has an validated pte
+@@ -456,7 +503,7 @@
+ static void
+ check_alloc_page(void) {
+     pmm_manager->check();
+-    cprintf("check_alloc_page() succeeded!\n");
++    pmm_infof("check_alloc_page() succeeded!\n");
+ }
+ 
+ static void
+@@ -504,7 +551,7 @@
+     free_page(pde2page(boot_pgdir[0]));
+     boot_pgdir[0] = 0;
+ 
+-    cprintf("check_pgdir() succeeded!\n");
++    pmm_infof("check_pgdir() succeeded!\n");
+ }
+ 
+ static void
+@@ -538,7 +585,7 @@
+     free_page(pde2page(boot_pgdir[0]));
+     boot_pgdir[0] = 0;
+ 
+-    cprintf("check_boot_pgdir() succeeded!\n");
++    pmm_infof("check_boot_pgdir() succeeded!\n");
+ }
+ 
+ //perm2str - use string 'u,r,w,-' to present the permission
+diff -r -u -P ../lab2.orin/kern/trap/trap.c ./kern/trap/trap.c
+--- ../lab2.orin/kern/trap/trap.c	2019-10-28 16:21:56.469858835 +0800
++++ ./kern/trap/trap.c	2019-10-28 16:22:01.869858993 +0800
+@@ -10,6 +10,14 @@
+ #include <kdebug.h>
+ 
+ #define TICK_NUM 100
++// number of interrupt that is reserved by intel
++#define N_RESERVED_INT 32
++#define N_INT 256
++/* selectors */
++#define PROT_MODE_CSEG 0x8
++#define PROT_MODE_DSEG 0x10
++#define PROT_MODE_UCSEG 0x1B
++#define PROT_MODE_UDSEG 0x23
+ 
+ static void print_ticks() {
+     cprintf("%d ticks\n",TICK_NUM);
+@@ -25,12 +33,14 @@
+  * Must be built at run time because shifted function addresses can't
+  * be represented in relocation records.
+  * */
+-static struct gatedesc idt[256] = {{0}};
++static struct gatedesc idt[N_INT] = {{0}};
+ 
+ static struct pseudodesc idt_pd = {
+     sizeof(idt) - 1, (uintptr_t)idt
+ };
+ 
++extern uintptr_t __vectors[]; // entry addrs of each ISR
++
+ /* idt_init - initialize IDT to each of the entry points in kern/trap/vectors.S */
+ void
+ idt_init(void) {
+@@ -46,6 +56,16 @@
+       *     You don't know the meaning of this instruction? just google it! and check the libs/x86.h to know more.
+       *     Notice: the argument of lidt is idt_pd. try to find it!
+       */
++
++    for (int i = 0; i < N_INT; ++i) {
++        SETGATE(idt[i], 0, PROT_MODE_CSEG, __vectors[i], DPL_KERNEL);
++    }
++    // set DPL to DPL_USER to permit user to use `int 80`
++    SETGATE(idt[T_SYSCALL], 1, PROT_MODE_CSEG, __vectors[T_SYSCALL] , DPL_USER);
++    /* temporary open this int */
++    SETGATE(idt[T_SWITCH_TOK], 1, PROT_MODE_CSEG, __vectors[T_SWITCH_TOK] , DPL_USER);
++    // load IDT
++    lidt(&idt_pd);
+ }
+ 
+ static const char *
+@@ -134,6 +154,39 @@
+     cprintf("  eax  0x%08x\n", regs->reg_eax);
+ }
+ 
++static int do_switch_to_user(struct trapframe *tf) {
++    if (tf->tf_cs != USER_CS) {
++        tf->tf_ds = PROT_MODE_UDSEG;
++        tf->tf_es = PROT_MODE_UDSEG;
++        tf->tf_fs = PROT_MODE_UDSEG;
++        tf->tf_gs = PROT_MODE_UDSEG;
++        tf->tf_ss = PROT_MODE_UDSEG;
++        tf->tf_cs = PROT_MODE_UCSEG; /* Code Selector Here */
++        tf->tf_eflags &= ~FL_IOPL_MASK;
++        tf->tf_eflags |= FL_IOPL_3; /* set IOPL=3 to allow ring3 to access IO port */
++        return 0;
++    }
++    return 1;
++}
++
++static int do_switch_to_kernel(struct trapframe *tf) {
++    if (tf->tf_cs != KERNEL_CS) {
++        cprintf("Switching to kernel...\n");
++        tf->tf_ds = PROT_MODE_DSEG;
++        tf->tf_es = PROT_MODE_DSEG;
++        tf->tf_fs = PROT_MODE_DSEG;
++        tf->tf_gs = PROT_MODE_DSEG;
++        tf->tf_ss = PROT_MODE_DSEG;
++        tf->tf_cs = PROT_MODE_CSEG; /* Code Selector Here */
++        /* clear bits */
++        tf->tf_eflags &= ~FL_IOPL_MASK;
++        /* reset to IOPL=0 */
++        tf->tf_eflags |= FL_IOPL_0;
++        return 0;
++    }
++    return 1;
++}
++
+ /* trap_dispatch - dispatch based on what type of trap occurred */
+ static void
+ trap_dispatch(struct trapframe *tf) {
+@@ -147,10 +200,23 @@
+          * (2) Every TICK_NUM cycle, you can print some info using a funciton, such as print_ticks().
+          * (3) Too Simple? Yes, I think so!
+          */
++        ticks++;
++        if (ticks % TICK_NUM == 0) {
++            print_ticks();
++        }
+         break;
+     case IRQ_OFFSET + IRQ_COM1:
+         c = cons_getc();
+         cprintf("serial [%03d] %c\n", c, c);
++        if (c == '0') {
++            if (!do_switch_to_kernel(tf)) {
++                print_trapframe(tf);
++            }
++        } else if (c == '3') {
++            if (!do_switch_to_user(tf)) {
++                print_trapframe(tf);
++            }
++        }
+         break;
+     case IRQ_OFFSET + IRQ_KBD:
+         c = cons_getc();
+@@ -158,19 +224,46 @@
+         break;
+     //LAB1 CHALLENGE 1 : YOUR CODE you should modify below codes.
+     case T_SWITCH_TOU:
++        if (do_switch_to_user(tf)) {
++            panic("unexpected T_SWITCH_TOU in user space detected.\n");
++        }
++        break;
+     case T_SWITCH_TOK:
+-        panic("T_SWITCH_** ??\n");
++        if (do_switch_to_kernel(tf)) {
++            panic("unexpected T_SWITCH_TOK in user space detected.\n");
++        }
++        break;
++    case T_SYSCALL:
++        /* empty statment here to workaround */ ;
++        uint32_t eax = tf->tf_regs.reg_eax;
++        cprintf("[syscall] %%eax=0x%02x(%u)\n", eax, eax);
++        switch (eax) {
++        case 0xff:
++            tf->tf_regs.reg_eax = ticks;
++            cprintf("in kernel, ticks is %u\n", ticks);
++            break;
++        default:
++            panic("unexpected syscall %%eax=0x%02x(%u)\n", eax, eax);
++        }
+         break;
+     case IRQ_OFFSET + IRQ_IDE1:
+     case IRQ_OFFSET + IRQ_IDE2:
+         /* do nothing */
+         break;
++    case T_GPFLT: /* general protection fault */
++        cprintf("General Protection Fault with errno 0x%08x\n", tf->tf_err);
++        panic("General Protection Fault\n");
++    break;
+     default:
+         // in kernel, it must be a mistake
+         if ((tf->tf_cs & 3) == 0) {
+             print_trapframe(tf);
+             panic("unexpected trap in kernel.\n");
+         }
++        uint32_t tn = tf->tf_trapno;
++        uint32_t en = tf->tf_err;
++        cprintf("Unexpected uncategoried trap 0x%08x(%u) with errno 0x%08x(%u)\n", tn, tn, en, en);
++        panic("Unexpected Uncategoried Trap\n");
+     }
+ }
+ 
+diff -r -u -P ../lab2.orin/kern/trap/trapentry.S ./kern/trap/trapentry.S
+--- ../lab2.orin/kern/trap/trapentry.S	2019-10-28 16:21:56.469858835 +0800
++++ ./kern/trap/trapentry.S	2019-10-28 16:22:01.869858993 +0800
+@@ -18,6 +18,8 @@
+     movw %ax, %es
+ 
+     # push %esp to pass a pointer to the trapframe as an argument to trap()
++    # esp <- esp - 4
++    # M[ss:esp] <- SRC
+     pushl %esp
+ 
+     # call trap(tf), where tf=%esp
+@@ -40,5 +42,13 @@
+ 
+     # get rid of the trap number and error code
+     addl $0x8, %esp
++    # the stack is supposed to be
++    # Low address -> High address
++    # 32: eip
++    # 32: cs (and padding)
++    # 32: elflags
++    # (Optional) BELOW ONLY WHEN CROSSING RINGS:
++    # 32: esp 
++    # 32: ss (and padding)
+     iret
+ 
+diff -r -u -P ../lab2.orin/lab2.patch ./lab2.patch
+--- ../lab2.orin/lab2.patch	1970-01-01 08:00:00.000000000 +0800
++++ ./lab2.patch	2019-10-28 16:22:57.849860620 +0800
+@@ -0,0 +1,1113 @@
++diff -r -u -P ../lab2.orin/boot/asm.h ./boot/asm.h
++--- ../lab2.orin/boot/asm.h	2019-10-28 16:21:56.456525501 +0800
+++++ ./boot/asm.h	2019-10-28 16:22:01.866525660 +0800
++@@ -8,18 +8,38 @@
++     .word 0, 0;                                                 \
++     .byte 0, 0, 0, 0
++ 
+++/**
+++ * 0x90 -> 0b1001_0000
+++ * the rightmost 1 for `always`, should be 1 for everything but TSS and LDT
+++ * the leftmost 1 for `present`
+++ * the middle `00` for DPL
+++ * 
+++ * 0xC0 -> 0b1100_0000
+++ * the leftmost first 1 for gran=1, use 4k page addressing
+++ * the left second 1 for big=1, 32bit opcodes for code, uint32_t stack for data
+++ */
++ #define SEG_ASM(type,base,lim)                                  \
++     .word (((lim) >> 12) & 0xffff), ((base) & 0xffff);          \
++     .byte (((base) >> 16) & 0xff), (0x90 | (type)),             \
++         (0xC0 | (((lim) >> 28) & 0xf)), (((base) >> 24) & 0xff)
++ 
+++/**
+++ * NOTICE: no need for this macro, since GDT will be gracefully reloaded after init.
+++ * set descriptor for user mode
+++ * 0xf0 -> 0b1111_0000
+++ * the middle `11` for DPL=3
+++ */
+++#define SEG_UASM(type,base,lim)                                  \
+++    .word (((lim) >> 12) & 0xffff), ((base) & 0xffff);          \
+++    .byte (((base) >> 16) & 0xff), (0xf0 | (type)),             \
+++        (0xC0 | (((lim) >> 28) & 0xf)), (((base) >> 24) & 0xff)
++ 
++ /* Application segment type bits */
++ #define STA_X       0x8     // Executable segment
++-#define STA_E       0x4     // Expand down (non-executable segments)
++-#define STA_C       0x4     // Conforming code segment (executable only)
++-#define STA_W       0x2     // Writeable (non-executable segments)
++-#define STA_R       0x2     // Readable (executable segments)
+++#define STA_E       0x4     // Expand down (for non-executable segments)
+++#define STA_C       0x4     // Conforming code segment (for executable only)
+++#define STA_W       0x2     // Writeable (for non-executable segments)
+++#define STA_R       0x2     // Readable (for executable segments)
++ #define STA_A       0x1     // Accessed
++ 
++ #endif /* !__BOOT_ASM_H__ */
++diff -r -u -P ../lab2.orin/boot/bootasm.S ./boot/bootasm.S
++--- ../lab2.orin/boot/bootasm.S	2019-10-28 16:21:56.456525501 +0800
+++++ ./boot/bootasm.S	2019-10-28 16:22:01.866525660 +0800
++@@ -43,28 +43,29 @@
++     movb $0xdf, %al                                 # 0xdf -> port 0x60
++     outb %al, $0x60                                 # 0xdf = 11011111, means set P2's A20 bit(the 1 bit) to 1
++ 
+++# we store the memory info into 0x8000
++ probe_memory:
++     movl $0, 0x8000
++-    xorl %ebx, %ebx
++-    movw $0x8004, %di
+++    xorl %ebx, %ebx                                 # 0 for the first probe. An int for the probing count.
+++    movw $0x8004, %di                               # es:di the buffer address.
++ start_probe:
++-    movl $0xE820, %eax
++-    movl $20, %ecx
++-    movl $SMAP, %edx
+++    movl $0xE820, %eax                              # int codes
+++    movl $20, %ecx                                  # available buffer size. Required to be larger than 20
+++    movl $SMAP, %edx                                # Magic Number, ascii for "SMAP"
++     int $0x15
++-    jnc cont
++-    movw $12345, 0x8000
+++    jnc cont                                        # if `int 0x15` succeeds, CF is clear, so jump to cont.
+++    movw $12345, 0x8000                             # `int 0x15` fails, write magic number and finish
++     jmp finish_probe
++ cont:
++     addw $20, %di
++     incl 0x8000
++-    cmpl $0, %ebx
+++    cmpl $0, %ebx                                   # 0 if probe succeeds and finishes.
++     jnz start_probe
++ finish_probe:
++ 
++     # Switch from real to protected mode, using a bootstrap GDT
++     # and segment translation that makes virtual addresses
++-    # identical to physical addresses, so that the
+++    # **identical** to physical addresses, so that the
++     # effective memory map does not change during the switch.
++     lgdt gdtdesc
++     movl %cr0, %eax
++diff -r -u -P ../lab2.orin/kern/debug/kdebug.c ./kern/debug/kdebug.c
++--- ../lab2.orin/kern/debug/kdebug.c	2019-10-28 16:21:56.456525501 +0800
+++++ ./kern/debug/kdebug.c	2019-10-28 16:22:01.866525660 +0800
++@@ -296,7 +296,7 @@
++      /* LAB1 YOUR CODE : STEP 1 */
++      /* (1) call read_ebp() to get the value of ebp. the type is (uint32_t);
++       * (2) call read_eip() to get the value of eip. the type is (uint32_t);
++-      * (3) from 0 .. STACKFRAME_DEPTH
+++      * (3) from 0 .. STACKFRAME_DEkPTH
++       *    (3.1) printf value of ebp, eip
++       *    (3.2) (uint32_t)calling arguments [0..4] = the contents in address (uint32_t)ebp +2 [0..4]
++       *    (3.3) cprintf("\n");
++@@ -305,5 +305,17 @@
++       *           NOTICE: the calling funciton's return addr eip  = ss:[ebp+4]
++       *                   the calling funciton's ebp = ss:[ebp]
++       */
+++    uint32_t ebp = read_ebp();
+++    uint32_t eip = read_eip();
+++    int _depth = 0;
+++    while (ebp != 0 && _depth++ < STACKFRAME_DEPTH) {
+++        cprintf("ebp:0x%08x eip:0x%08x ", ebp, eip);
+++        uint32_t* args = ((uint32_t*) ebp) + 2;
+++        cprintf("args: 0x%08x 0x%08x 0x%08x 0x%08x\n", args[0], args[1], args[2], args[3]);
+++        print_debuginfo(eip - 1);
+++        eip = *(((uint32_t*) ebp) + 1);
+++        ebp = *((uint32_t*) ebp);
+++    }
+++
++ }
++ 
++diff -r -u -P ../lab2.orin/kern/init/init.c ./kern/init/init.c
++--- ../lab2.orin/kern/init/init.c	2019-10-28 16:21:56.459858835 +0800
+++++ ./kern/init/init.c	2019-10-28 16:22:01.866525660 +0800
++@@ -38,7 +38,7 @@
++ 
++     //LAB1: CAHLLENGE 1 If you try to do it, uncomment lab1_switch_test()
++     // user/kernel mode switch test
++-    //lab1_switch_test();
+++    // lab1_switch_test();
++ 
++     /* do nothing */
++     while (1);
++@@ -85,11 +85,57 @@
++ static void
++ lab1_switch_to_user(void) {
++     //LAB1 CHALLENGE 1 : TODO
+++    /**
+++     * Stack: Low address -> High address
+++     * 32: ss (and padding)
+++     * 32: esp
+++     * 32: eflags
+++     * 32: cs (and padding)
+++     * 32: eip
+++     */
+++    __asm__ volatile(
+++        "movl %%esp, %%eax \n\t"
+++        "pushl %%ss \n\t"
+++        "pushl %%eax \n\t"
+++        "int %0 \n\t"
+++        : /* output */
+++        : "i"(T_SWITCH_TOU)
+++    );
++ }
++ 
++ static void
++ lab1_switch_to_kernel(void) {
++     //LAB1 CHALLENGE 1 :  TODO
+++    /**
+++     * TSS works here and change ss:esp to `stack0` when int 0x70.
+++     * After the interrupt, ss:esp should be manually set to the origin value.
+++     */
+++    __asm__ volatile(
+++        "int %0 \n\t"
+++        "movw 0x4(%%esp), %%ss \n\t"
+++        "popl %%esp \n\t"
+++        : /* output */
+++        : "i"(T_SWITCH_TOK)
+++    );
+++}
+++
+++static void
+++trigger_gpf() {
+++    __asm__ volatile(
+++        "int $0x1 \n\t"
+++    );
+++}
+++
+++static uint32_t
+++get_ticks() {
+++    uint32_t __ticks;
+++    __asm__ volatile(
+++        "movl $0xff, %%eax \n\t"
+++        "int $0x80 \n\t"
+++        : "=a"(__ticks)
+++        : /* empty input */
+++    );
+++    return __ticks;
++ }
++ 
++ static void
++@@ -98,6 +144,9 @@
++     cprintf("+++ switch to  user  mode +++\n");
++     lab1_switch_to_user();
++     lab1_print_cur_status();
+++    // trigger_gpf(); /* trigger general protection fault pass test */
+++    uint32_t _ticks = get_ticks();
+++    cprintf("Get ticks %u in user mode\n", _ticks);
++     cprintf("+++ switch to kernel mode +++\n");
++     lab1_switch_to_kernel();
++     lab1_print_cur_status();
++diff -r -u -P ../lab2.orin/kern/libs/logging.c ./kern/libs/logging.c
++--- ../lab2.orin/kern/libs/logging.c	1970-01-01 08:00:00.000000000 +0800
+++++ ./kern/libs/logging.c	2019-10-28 16:22:01.866525660 +0800
++@@ -0,0 +1,10 @@
+++#include <defs.h>
+++#include <console.h>
+++#include <stdio.h>
+++#include <logging.h>
+++
+++const char* LOGGING_LEVEL_PRT[] = {
+++    "DEBUG", "INFO", "WARNING", "ERROR", "PANIC"
+++};
+++
+++const uint8_t __logging_raw_cnt_mg_flg__ = 0;
++\ No newline at end of file
++diff -r -u -P ../lab2.orin/kern/mm/buddy_pmm.c ./kern/mm/buddy_pmm.c
++--- ../lab2.orin/kern/mm/buddy_pmm.c	1970-01-01 08:00:00.000000000 +0800
+++++ ./kern/mm/buddy_pmm.c	2019-10-28 16:22:01.866525660 +0800
++@@ -0,0 +1,347 @@
+++#include <pmm.h>
+++#include <string.h>
+++#include <buddy_pmm.h>
+++#include <x86.h>
+++#include <stdio.h>
+++#include <logging.h>
+++
+++static struct buddy_pmm_meta pmm_meta;
+++
+++#define buddy_nr_free (pmm_meta.nr_free)
+++#define buddy_rollup_nr_free (pmm_meta.rollup_nr_free)
+++#define cont (pmm_meta.cont_log2)
+++#define alloctree_init (pmm_meta.alloctree_init)
+++
+++/* define logging macros */
+++#define mmu_debugf(fmt, ...) debugf(MMU, fmt, ##__VA_ARGS__)
+++#define mmu_warnf(fmt, ...) warnf(MMU, fmt, ##__VA_ARGS__)
+++#define mmu_infof(fmt, ...) infof(MMU, fmt, ##__VA_ARGS__)
+++#define mmu_errorf(fmt, ...) errorf(MMU, fmt, ##__VA_ARGS__)
+++#define mmu_panicf(fmt, ...) panicf(MMU, fmt, ##__VA_ARGS__)
+++
+++static inline void
+++report(struct Page* page, size_t n, char* str) {
+++    if (page == NULL) {
+++        mmu_infof("%s\nPage Fault: NULL %u page(s)\n", str, n);
+++        return;
+++    }
+++    struct Page *beg = page, *end = page + n - 1;
+++    uint32_t nbeg = page2ppn(beg), nend = page2ppn(end);
+++    uintptr_t beg_addr = page2pa(beg), end_addr = page2pa(end);
+++    if (n == 1) {
+++        mmu_infof("%s\n%u page(%u) @0x%08x\n", str, n, nbeg, beg_addr);
+++    } else {
+++        mmu_infof("%s\n%u pages(%u - %u) @0x%08x - @0x%08x\n", str, n, nbeg, nend, beg_addr, end_addr);
+++    }
+++}
+++
+++static void
+++buddy_pmm_init(void) {
+++    buddy_nr_free = 0;
+++    buddy_rollup_nr_free = 0;
+++    alloctree_init = 0; /* not init until first alloc. */
+++    cont[0] = 0;
+++}
+++
+++static void 
+++buddy_init_memmap(struct Page* base, size_t n) {
+++    /* reporting */
+++    assert(n > 0);
+++
+++    report(base, n, "buddy_init_memmap");
+++    pmm_meta.pnn_offset = page2ppn(base);
+++
+++    for (struct Page* p = base; p != base + n; p++) {
+++        assert(PageReserved(p));
+++        p->flags = p->property = 0;
+++        set_page_ref(p, 0);
+++    }
+++    buddy_nr_free += n;
+++}
+++
+++static void
+++do_init_alloctree(size_t idx, uint32_t ncap, uint32_t nfree) {
+++    if (ncap == 0) return;
+++
+++    uint32_t next_cap = ncap / 2;
+++    uint32_t lfree = min(nfree, next_cap);
+++    uint32_t rfree = nfree - lfree;
+++
+++    cont[idx] = nfree;
+++    do_init_alloctree(LEFT(idx), next_cap, lfree);
+++    do_init_alloctree(RIGHT(idx), next_cap, rfree);
+++}
+++
+++static void
+++buddy_init_alloctree(void) {
+++    alloctree_init = 1;
+++
+++    buddy_rollup_nr_free = ROLLUP_POW2(buddy_nr_free);
+++    mmu_debugf("nr_free = %u, roll up nr_free = %u\n", buddy_nr_free, buddy_rollup_nr_free);
+++    do_init_alloctree(1, buddy_rollup_nr_free, buddy_nr_free);
+++
+++    RAW_LOGGING
+++    mmu_infof("showing cont info ...\n");
+++    for (int i = 1; i < 20; ++i) {
+++        mmu_infof("%d:%u ", i, cont[i]);
+++    }
+++    mmu_infof("\n");
+++    ENDR
+++}
+++
+++static struct Page*
+++do_alloc_pages(size_t idx, size_t n) {
+++    assert(idx > 0 && idx < BUDDY_NPG);
+++    RAW_LOGGING mmu_debugf("calling alloc pages, idx=%u, cont=%u\n", idx, cont[idx]); ENDR
+++
+++    /* quick match */
+++    if (idx2nodesize(idx) == n && !USED(idx)) {
+++        cont[idx] = 0;
+++        return idx2page(idx);
+++    }
+++    /* early stop */
+++    if (cont[idx] < n) {
+++        return NULL;
+++    }
+++
+++    assert(cont[idx] >= n);
+++
+++    struct Page* lpage = do_alloc_pages(LEFT(idx), n);
+++    if (lpage) {
+++        cont[idx] = max(cont[LEFT(idx)], cont[RIGHT(idx)]);
+++        return lpage;
+++    }
+++    struct Page* rpage = do_alloc_pages(RIGHT(idx), n);
+++    if (rpage) {
+++        cont[idx] = max(cont[LEFT(idx)], cont[RIGHT(idx)]);
+++        return rpage;
+++    }
+++    assert(0); /* never reach here */
+++    return NULL;
+++}
+++
+++
+++static struct Page *
+++buddy_alloc_pages(size_t n) {
+++    if (!alloctree_init) {
+++        buddy_init_alloctree();
+++    }
+++    uint32_t rollup_n = ROLLUP_POW2(n);
+++    mmu_debugf("start to do alloc page(s)\n");
+++    struct Page* p = do_alloc_pages(HEAD, rollup_n);
+++    report(p, rollup_n, "buddy_alloc_pages");
+++    return p;
+++}
+++
+++static void
+++do_free_pages_backwords(size_t idx) {
+++    assert(idx > 0 && idx < BUDDY_NPG);
+++    if (!last_layer(idx)) {
+++        if (NOT_USED(LEFT(idx)) && NOT_USED(RIGHT(idx))) {
+++            cont[idx] = cont[LEFT(idx)] + cont[RIGHT(idx)];
+++        } else {
+++            cont[idx] = max(cont[LEFT(idx)], cont[RIGHT(idx)]);
+++        }
+++    }
+++    RAW_LOGGING mmu_debugf("backwords with idx=%u, cont=%u\n", idx, cont[idx]); ENDR
+++    if (!first_layer(idx)) {
+++        do_free_pages_backwords(PAR(idx));
+++    }
+++}
+++
+++
+++/**
+++ * buddy_free_pages REQUIRED allocs and frees in the EXACTLY
+++ * symmetrical way.
+++ * e.g. not allow to allc(2), alloc(2) then free(4).
+++ */
+++static void
+++buddy_free_pages(struct Page* base, size_t n) {
+++    assert(alloctree_init);
+++
+++    if (base == NULL || n == 0) return;
+++    assert(n > 0);
+++
+++    uint32_t rollup_n = ROLLUP_POW2(n);
+++
+++    mmu_debugf("nodesize=%u, depth=%u, debug=%u, fst=%u, buddy_rullup_nr_free=%u\n", rollup_n, nodesize2depth(rollup_n), buddy_rollup_nr_free/rollup_n, nodesize2fstidx(rollup_n), buddy_rollup_nr_free);
+++
+++    bool found = 0;
+++    size_t cur_idx = HEAD;
+++    ppn_t bppn = page2ppn(base);
+++    while (!out_of_range(cur_idx)) {
+++        uint32_t nodesize = idx2nodesize(cur_idx);
+++        ppn_t ppn = idx2ppn(cur_idx);
+++        RAW_LOGGING 
+++        mmu_debugf("searching idx=%u, n=%u, bppn=%u, nodesize=%u, ppn=%u\n", cur_idx, n, bppn, nodesize, ppn); ENDR
+++        if (nodesize == n && ppn == bppn) {
+++            /* parameter match */
+++            if (cont[cur_idx] == 0) {
+++                mmu_debugf("freeing %u, backward...\n", cur_idx);
+++                cont[cur_idx] = n;
+++                do_free_pages_backwords(cur_idx);
+++                found = 1;
+++                break;
+++            } else {
+++                mmu_warnf("WARN: cont[cur_idx]=%u not ZERO\n", cont[cur_idx]);
+++            }
+++        } else if (idx2ppn(RIGHT(cur_idx)) > bppn) {
+++            assert(idx2ppn(LEFT(cur_idx)) <= bppn);
+++            cur_idx = LEFT(cur_idx);
+++        } else {
+++            /* idx2ppn(RIGHT(idx)) <= ppn */
+++            cur_idx = RIGHT(cur_idx);
+++        }
+++    }
+++
+++    RAW_LOGGING mmu_debugf("end\n"); ENDR
+++    if (!found) {
+++        report(base, rollup_n, "WARN, fails to free pages.");
+++    } else {
+++        report(base, rollup_n, "buddy_free_pages.");
+++    }
+++
+++}
+++
+++static size_t
+++buddy_nr_free_pages(void) {
+++    return buddy_nr_free;
+++}
+++
+++static void
+++one_page_check(void) {
+++    uint32_t nr_free_store = buddy_nr_free;
+++    buddy_nr_free = 16;
+++    struct Page *p0, *p1, *p2;
+++    p0 = p1 = p2 = NULL;
+++    assert((p0 = alloc_page()) != NULL);
+++    assert((p1 = alloc_page()) != NULL);
+++    assert((p2 = alloc_page()) != NULL);
+++    mmu_debugf("now freeing ...\n");
+++
+++    free_page(p1);
+++    free_page(p0);
+++    free_page(p2);
+++
+++    struct Page* page[16];
+++    for (int i = 0; i < 16; ++i) {
+++        assert((page[i] = alloc_page()) != NULL);
+++    }
+++    assert(alloc_page() == NULL);
+++    for (int i = 0; i < 16; ++i) {
+++        free_page(page[i]);
+++    }
+++
+++    mmu_debugf("+++++++ MMU reset ++++++++\n");
+++    alloctree_init = 0;
+++    buddy_nr_free = nr_free_store;
+++}
+++
+++static void
+++pages_check() {
+++    mmu_debugf("++++++++ starting pages check +++++++++\n");
+++    uint32_t nr_free_store = buddy_nr_free;
+++    buddy_nr_free = 16;
+++
+++    struct Page *p0, *p1, *p2, *p3;
+++    assert((p0 = alloc_pages(16)) != NULL);
+++    assert(alloc_page() == NULL);
+++    free_pages(p0, 16);
+++
+++    assert((p0 = alloc_pages(8)) != NULL);
+++    assert((p1 = alloc_pages(8)) != NULL);
+++    assert(alloc_page() == NULL);
+++    free_pages(p0, 8);
+++    free_pages(p1, 8);
+++
+++    struct Page* page[8];
+++    for (int i = 0; i < 8; ++i) {
+++        assert((page[i] = alloc_pages(2)) != NULL);
+++    }
+++    assert(alloc_page() == NULL);
+++    for (int i = 0; i < 8; ++i) {
+++        free_pages(page[i], 2);
+++    }
+++    mmu_debugf("--------- MMU reset --------\n");
+++    alloctree_init = 0;
+++    buddy_nr_free = nr_free_store;
+++}
+++
+++static void
+++random_alloc_check(void) {
+++    mmu_debugf("+++++++ starting random_alloc_check ++++++++\n");
+++    uint32_t nr_free_store = buddy_nr_free;
+++    buddy_nr_free = 16;
+++
+++    struct Page *p0, *p1, *p2;
+++    assert((p0 = alloc_pages(7)) != NULL);
+++    assert((p1 = alloc_pages(3)) != NULL);
+++    struct Page* page[4];
+++    for (int i = 0; i < 4; ++i) {
+++        assert((page[i] = alloc_page()) != NULL);
+++    }
+++    assert(alloc_page() == NULL);
+++
+++    free_pages(p1, 3);
+++    free_pages(p0, 7);
+++    for (int i = 0; i < 4; ++i) {
+++        free_page(page[i]);
+++    }
+++    mmu_debugf("--------- MMU reset --------\n");
+++    alloctree_init = 0;
+++    buddy_nr_free = nr_free_store;
+++}
+++
+++static void
+++rollup_alloc_check(void) {
+++    uint32_t nr_free_store = buddy_nr_free;
+++    buddy_nr_free = 9;
+++    mmu_debugf("+++++++ starting rollup_alloc_check ++++++++\n");
+++
+++    struct Page *p0, *p1, *p2;
+++    assert((p0 = alloc_pages(8)) != NULL);
+++    assert((p1 = alloc_page()) != NULL);
+++    assert(alloc_page() == NULL);
+++    free_page(p1);
+++    free_pages(p0, 8);
+++
+++    assert((p0 = alloc_pages(4)) != NULL);
+++    assert((p1 = alloc_pages(4)) != NULL);
+++    assert((p2 = alloc_page()) != NULL);
+++    assert(alloc_page() == NULL);
+++    free_pages(p1, 4);
+++    free_page(p2);
+++    free_pages(p0, 4);
+++
+++    struct Page* page[9];
+++    for (int i = 0; i < 9; ++i) {
+++        assert((page[i] = alloc_page()) != NULL);
+++    }
+++    assert(alloc_page() == NULL);
+++
+++    for (int i = 8; i >= 0; --i) {
+++        free_page(page[i]);
+++    }
+++
+++    mmu_debugf("--------- MMU reset --------\n");
+++    alloctree_init = 0;
+++    buddy_nr_free = nr_free_store;
+++}
+++
+++static void
+++buddy_pmm_check(void) {
+++    one_page_check();
+++    pages_check();
+++    random_alloc_check();
+++    rollup_alloc_check();
+++}
+++
+++const struct pmm_manager buddy_pmm_manager = {
+++    .name = "buddy_pmm_manager",
+++    .init = buddy_pmm_init,
+++    .init_memmap = buddy_init_memmap,
+++    .alloc_pages = buddy_alloc_pages,
+++    .free_pages = buddy_free_pages,
+++    .nr_free_pages = buddy_nr_free_pages,
+++    .check = buddy_pmm_check,
+++};
++\ No newline at end of file
++diff -r -u -P ../lab2.orin/kern/mm/buddy_pmm.h ./kern/mm/buddy_pmm.h
++--- ../lab2.orin/kern/mm/buddy_pmm.h	1970-01-01 08:00:00.000000000 +0800
+++++ ./kern/mm/buddy_pmm.h	2019-10-28 16:22:01.866525660 +0800
++@@ -0,0 +1,84 @@
+++#ifndef __KERN_MM_BUDDY_PMM_H__
+++#define __KERN_MM_BUDDY_PMM_H__
+++
+++#include <pmm.h>
+++#include <memlayout.h>
+++
+++#define BUDDY_NPG (KMEMSIZE / PGSIZE)
+++
+++/**
+++ *  LM1 return the position(n-th bit) of the left most 1-bit 
+++ *  NOTICE: only work for an uint32_t
+++ */
+++#define LM1(u) ({                                              \
+++    __typeof__ (u) __lm1_u = u;                                \
+++    if (__lm1_u == 0) {                                        \
+++        panic("call __builtin_clz for 0\n");                   \
+++    }                                                          \
+++    (32 - __builtin_clz(__lm1_u));                             \
+++})
+++
+++/* roll an uint32_t up to a power of two */
+++#define ROLLUP_POW2(u) ({                                      \
+++    __typeof__ (u) __rollup_pow2_u = u - 1;                    \
+++    uint32_t __rollup_pow2_res;                                \
+++    if (u == 1) {                                              \
+++        __rollup_pow2_res = 1;                                 \
+++    } else {                                                   \
+++        __typeof__ (u) __shft = LM1(__rollup_pow2_u);          \
+++        __rollup_pow2_res = (1 << __shft);                     \
+++    }                                                          \
+++    __rollup_pow2_res;                                         \
+++})
+++
+++#define HEAD (1)
+++#define LEFT(idx) (idx * 2)
+++#define RIGHT(idx) (idx * 2 + 1)
+++#define PAR(idx) (idx / 2)
+++#define BRO(idx) (idx ^ 0x1)
+++
+++#define USED(idx) (cont[idx] == 0)
+++#define NOT_USED(idx) (cont[idx] == idx2nodesize(idx))
+++
+++/** 
+++ * idx2depth calculate the depth of idx-node.
+++ * the root has depth 1 and idx 1.
+++ */
+++#define idx2depth(idx) (LM1(idx))
+++#define depth2nodesize(depth) (buddy_rollup_nr_free / (1 << (depth - 1)))
+++#define idx2nodesize(idx) (depth2nodesize(idx2depth(idx)))
+++
+++#define depth2fstidx(depth) (1 << (depth - 1))
+++#define max_depth (LM1(buddy_rollup_nr_free))
+++// TODO: critical bug below
+++#define nodesize2depth(nodesize) (max_depth + 1 - LM1(nodesize)) 
+++#define nodesize2fstidx(nodesize) (depth2fstidx(nodesize2depth(nodesize)))
+++
+++/** 
+++ * idx2lgppn convert an idx to the logic page number.
+++ * the lgppn starts from 0
+++ */
+++#define idx2lgppn(idx) (idx * idx2nodesize(idx) - buddy_rollup_nr_free)
+++#define lgppn2ppn(lgppn) (lgppn + pmm_meta.pnn_offset)
+++#define idx2ppn(idx) (lgppn2ppn(idx2lgppn(idx)))
+++#define idx2page(idx) ((idx2ppn(idx) + pages))
+++
+++#define page2lgppn(page) (ppn2lgppn(page2ppn(page)))
+++#define ppn2lgppn(ppn) (ppn - pmm_meta.pnn_offset)
+++
+++#define first_layer(idx) (idx == HEAD)
+++#define last_layer(idx) (idx >= buddy_rollup_nr_free)
+++#define out_of_range(idx) (idx >= 2 * buddy_rollup_nr_free)
+++
+++
+++extern const struct pmm_manager buddy_pmm_manager;
+++
+++struct buddy_pmm_meta{
+++    bool alloctree_init;
+++    uint32_t nr_free;
+++    uint32_t rollup_nr_free;
+++    uint32_t cont_log2[BUDDY_NPG + 1];
+++    uint32_t pnn_offset; /* lgppn + ppn_offset = ppn (phy ppn) */
+++};
+++
+++#endif /* !	__KERN_MM_BUDDY_PMM_H__ */
++\ No newline at end of file
++diff -r -u -P ../lab2.orin/kern/mm/default_pmm.c ./kern/mm/default_pmm.c
++--- ../lab2.orin/kern/mm/default_pmm.c	2019-10-28 16:21:56.459858835 +0800
+++++ ./kern/mm/default_pmm.c	2019-10-28 16:22:01.866525660 +0800
++@@ -122,6 +122,7 @@
++ static struct Page *
++ default_alloc_pages(size_t n) {
++     assert(n > 0);
+++    // cprintf("[debug] n: %u, nr_free: %u\n", n, nr_free);
++     if (n > nr_free) {
++         return NULL;
++     }
++@@ -138,12 +139,31 @@
++         list_del(&(page->page_link));
++         if (page->property > n) {
++             struct Page *p = page + n;
+++            assert(!PageReserved(p));
+++
++             p->property = page->property - n;
+++            SetPageProperty(p);
++             list_add(&free_list, &(p->page_link));
++-    }
+++        }
++         nr_free -= n;
++         ClearPageProperty(page);
++     }
+++    if (page == NULL) {
+++        cprintf("[MMU] alloc fails\n");
+++    }
+++    else if (n > 1) {
+++        struct Page* end_page = page + n - 1;
+++        ppn_t bppn = page2ppn(page);
+++        ppn_t eppn = bppn + n - 1;
+++        uintptr_t bpa = page2pa(page);
+++        uintptr_t epa = page2pa(end_page);
+++        cprintf("[MMU] alloc %u pages (%u-%u) @0x%08x - @0x%08x\n", n, bppn, eppn, bpa, epa);
+++    } else {
+++        assert(n == 1);
+++        ppn_t ppn = page2ppn(page);
+++        uintptr_t pa = page2pa(page);
+++        cprintf("[MMU] alloc 1 page (%u) @0x%08x\n", ppn, pa);
+++    }
++     return page;
++ }
++ 
++@@ -151,6 +171,7 @@
++ default_free_pages(struct Page *base, size_t n) {
++     assert(n > 0);
++     struct Page *p = base;
+++    struct Page *back_page = base;
++     for (; p != base + n; p ++) {
++         assert(!PageReserved(p) && !PageProperty(p));
++         p->flags = 0;
++@@ -166,16 +187,48 @@
++             base->property += p->property;
++             ClearPageProperty(p);
++             list_del(&(p->page_link));
+++            cprintf("   [MMU] freeing step: merging right pages %u\n", page2ppn(p));
++         }
++         else if (p + p->property == base) {
++             p->property += base->property;
++             ClearPageProperty(base);
++             base = p;
++             list_del(&(p->page_link));
+++            cprintf("   [MMU] freeing step: merging left pages %u\n", page2ppn(p));
++         }
++     }
+++
+++    /* freeing report below */
+++    if (n > 1) {
+++        ppn_t bppn = page2ppn(back_page);
+++        ppn_t eppn = bppn + n - 1;
+++        intptr_t bpa = page2pa(back_page);
+++        intptr_t epa = page2pa(back_page + n - 1);
+++        cprintf("[MMU] free %u pages (%u-%u) @0x%08x - @0x%08x\n", n, bppn, eppn, bpa, epa);
+++    } else {
+++        ppn_t ppn = page2ppn(back_page);
+++        intptr_t pa = page2pa(back_page);
+++        cprintf("[MMU] free 1 page (%u) @0x%08x\n", ppn, pa);
+++    }
+++
++     nr_free += n;
++-    list_add(&free_list, &(base->page_link));
+++    if (list_empty(&free_list)) {
+++        list_add(&free_list, &(base->page_link));
+++    } else {
+++        list_entry_t *le = list_next(&free_list);
+++        struct Page* cur_page = le2page(le, page_link);
+++        while (cur_page < base && list_next(le) != &free_list) {
+++            le = list_next(le);
+++            cur_page = le2page(le, page_link);
+++        }
+++        assert(cur_page != base);
+++        if (cur_page < base) {
+++            list_add_after(le, &(base->page_link));
+++        } else {
+++            /* cur_age > base */
+++            list_add_before(le, &(base->page_link));
+++        }
+++    }
++ }
++ 
++ static size_t
++@@ -246,9 +299,13 @@
++         count ++, total += p->property;
++     }
++     assert(total == nr_free_pages());
+++    cprintf("MMU: free blocks: %u, free pages: %u\n", count, total);
++ 
+++    /* gracefully restore all the state. */
++     basic_check();
++ 
+++    cprintf("finish basic_check for MMU\n");
+++
++     struct Page *p0 = alloc_pages(5), *p1, *p2;
++     assert(p0 != NULL);
++     assert(!PageProperty(p0));
++diff -r -u -P ../lab2.orin/kern/mm/mmu.h ./kern/mm/mmu.h
++--- ../lab2.orin/kern/mm/mmu.h	2019-10-28 16:21:56.459858835 +0800
+++++ ./kern/mm/mmu.h	2019-10-28 16:22:01.869858993 +0800
++@@ -95,6 +95,14 @@
++         (gate).gd_off_31_16 = (uint32_t)(off) >> 16;        \
++     }
++ 
+++/**
+++ * Return a selector for GDT/LDT
+++ *   - rpl: Request priviledge level
+++ *   - ti: Table indicator. 0 for GDT and 1 for LDT
+++ *   - idx: Index
+++ */
+++#define SETSEL(rpl, ti, idx) ( (rpl & 0b11) + ((ti & 1) << 2) + (rpl & 0x1fff) << 3)
+++
++ /* Set up a call gate descriptor */
++ #define SETCALLGATE(gate, ss, off, dpl) {                   \
++         (gate).gd_off_15_0 = (uint32_t)(off) & 0xffff;      \
++@@ -247,6 +255,8 @@
++ 
++ #define PTE_USER        (PTE_U | PTE_W | PTE_P)
++ 
+++#define SET_PDE(pdep, pa, flags) (*pdep = ((pa & ~0x0FFF) | flags))
+++
++ /* Control Register flags */
++ #define CR0_PE          0x00000001              // Protection Enable
++ #define CR0_MP          0x00000002              // Monitor coProcessor
++diff -r -u -P ../lab2.orin/kern/mm/pmm.c ./kern/mm/pmm.c
++--- ../lab2.orin/kern/mm/pmm.c	2019-10-28 16:21:56.459858835 +0800
+++++ ./kern/mm/pmm.c	2019-10-28 16:22:01.869858993 +0800
++@@ -5,9 +5,13 @@
++ #include <mmu.h>
++ #include <memlayout.h>
++ #include <pmm.h>
++-#include <default_pmm.h>
+++#include <buddy_pmm.h>
++ #include <sync.h>
++ #include <error.h>
+++#include <logging.h>
+++
+++#define pmm_infof(fmt, ...) \
+++    infof(PMM, fmt, ##__VA_ARGS__)
++ 
++ /* *
++  * Task State Segment:
++@@ -32,6 +36,7 @@
++ static struct taskstate ts = {0};
++ 
++ // virtual address of physicall page array
+++// pages was set to where larger than `end`
++ struct Page *pages;
++ // amount of physical memory (in pages)
++ size_t npage = 0;
++@@ -137,8 +142,9 @@
++ //init_pmm_manager - initialize a pmm_manager instance
++ static void
++ init_pmm_manager(void) {
++-    pmm_manager = &default_pmm_manager;
++-    cprintf("memory management: %s\n", pmm_manager->name);
+++    // pmm_manager = &default_pmm_manager;
+++    pmm_manager = &buddy_pmm_manager;
+++    pmm_infof("memory management: %s\n", pmm_manager->name);
++     pmm_manager->init();
++ }
++ 
++@@ -217,6 +223,7 @@
++         SetPageReserved(pages + i);
++     }
++ 
+++    /* essentially return addr - KERNBASE */
++     uintptr_t freemem = PADDR((uintptr_t)pages + sizeof(struct Page) * npage);
++ 
++     for (i = 0; i < memmap->nr_map; i ++) {
++@@ -359,6 +366,35 @@
++     }
++     return NULL;          // (8) return page table entry
++ #endif
+++    uint32_t pdx = PDX(la);
+++    pde_t *pdep = &pgdir[pdx];
+++    pte_t *pt = NULL; /* page table */
+++
+++    /* if page directory entry not exists */
+++    if (!(*pdep & PTE_P)) {
+++        if (create) {
+++            struct Page* new_pd_page = alloc_page();
+++            if (new_pd_page == NULL) {
+++                return NULL; /* no memory */
+++            }
+++            set_page_ref(new_pd_page, 1);
+++
+++            uintptr_t pd_pa = page2pa(new_pd_page);
+++            uintptr_t pd_la = (uintptr_t) KADDR(pd_pa);
+++
+++            pt = (pte_t *) pd_la; /* set newly alloc page's address to PT's address */
+++            memset(pt, 0, PGSIZE);
+++            SET_PDE(pdep, pd_pa, PTE_USER); /* use pa here */
+++
+++        } else {
+++            return NULL;
+++        }
+++    } else {
+++        /* pde exists */
+++        pt = KADDR(PDE_ADDR(*pdep));
+++    }
+++    /* PT must exist here */
+++    return pt + PTX(la);
++ }
++ 
++ //get_page - get related Page struct for linear address la using PDT pgdir
++@@ -404,6 +440,17 @@
++                                   //(6) flush tlb
++     }
++ #endif
+++    if (*ptep & PTE_P) {
+++        struct Page* page = pte2page(*ptep);
+++        page_ref_dec(page);
+++        if (page_ref(page) == 0) {
+++            /* this page should be freed */
+++            free_page(page);
+++        }
+++        *ptep = 0;
+++        tlb_invalidate(pgdir, la);
+++    }
+++
++ }
++ 
++ //page_remove - free an Page which is related linear address la and has an validated pte
++@@ -456,7 +503,7 @@
++ static void
++ check_alloc_page(void) {
++     pmm_manager->check();
++-    cprintf("check_alloc_page() succeeded!\n");
+++    pmm_infof("check_alloc_page() succeeded!\n");
++ }
++ 
++ static void
++@@ -504,7 +551,7 @@
++     free_page(pde2page(boot_pgdir[0]));
++     boot_pgdir[0] = 0;
++ 
++-    cprintf("check_pgdir() succeeded!\n");
+++    pmm_infof("check_pgdir() succeeded!\n");
++ }
++ 
++ static void
++@@ -538,7 +585,7 @@
++     free_page(pde2page(boot_pgdir[0]));
++     boot_pgdir[0] = 0;
++ 
++-    cprintf("check_boot_pgdir() succeeded!\n");
+++    pmm_infof("check_boot_pgdir() succeeded!\n");
++ }
++ 
++ //perm2str - use string 'u,r,w,-' to present the permission
++diff -r -u -P ../lab2.orin/kern/trap/trap.c ./kern/trap/trap.c
++--- ../lab2.orin/kern/trap/trap.c	2019-10-28 16:21:56.469858835 +0800
+++++ ./kern/trap/trap.c	2019-10-28 16:22:01.869858993 +0800
++@@ -10,6 +10,14 @@
++ #include <kdebug.h>
++ 
++ #define TICK_NUM 100
+++// number of interrupt that is reserved by intel
+++#define N_RESERVED_INT 32
+++#define N_INT 256
+++/* selectors */
+++#define PROT_MODE_CSEG 0x8
+++#define PROT_MODE_DSEG 0x10
+++#define PROT_MODE_UCSEG 0x1B
+++#define PROT_MODE_UDSEG 0x23
++ 
++ static void print_ticks() {
++     cprintf("%d ticks\n",TICK_NUM);
++@@ -25,12 +33,14 @@
++  * Must be built at run time because shifted function addresses can't
++  * be represented in relocation records.
++  * */
++-static struct gatedesc idt[256] = {{0}};
+++static struct gatedesc idt[N_INT] = {{0}};
++ 
++ static struct pseudodesc idt_pd = {
++     sizeof(idt) - 1, (uintptr_t)idt
++ };
++ 
+++extern uintptr_t __vectors[]; // entry addrs of each ISR
+++
++ /* idt_init - initialize IDT to each of the entry points in kern/trap/vectors.S */
++ void
++ idt_init(void) {
++@@ -46,6 +56,16 @@
++       *     You don't know the meaning of this instruction? just google it! and check the libs/x86.h to know more.
++       *     Notice: the argument of lidt is idt_pd. try to find it!
++       */
+++
+++    for (int i = 0; i < N_INT; ++i) {
+++        SETGATE(idt[i], 0, PROT_MODE_CSEG, __vectors[i], DPL_KERNEL);
+++    }
+++    // set DPL to DPL_USER to permit user to use `int 80`
+++    SETGATE(idt[T_SYSCALL], 1, PROT_MODE_CSEG, __vectors[T_SYSCALL] , DPL_USER);
+++    /* temporary open this int */
+++    SETGATE(idt[T_SWITCH_TOK], 1, PROT_MODE_CSEG, __vectors[T_SWITCH_TOK] , DPL_USER);
+++    // load IDT
+++    lidt(&idt_pd);
++ }
++ 
++ static const char *
++@@ -134,6 +154,39 @@
++     cprintf("  eax  0x%08x\n", regs->reg_eax);
++ }
++ 
+++static int do_switch_to_user(struct trapframe *tf) {
+++    if (tf->tf_cs != USER_CS) {
+++        tf->tf_ds = PROT_MODE_UDSEG;
+++        tf->tf_es = PROT_MODE_UDSEG;
+++        tf->tf_fs = PROT_MODE_UDSEG;
+++        tf->tf_gs = PROT_MODE_UDSEG;
+++        tf->tf_ss = PROT_MODE_UDSEG;
+++        tf->tf_cs = PROT_MODE_UCSEG; /* Code Selector Here */
+++        tf->tf_eflags &= ~FL_IOPL_MASK;
+++        tf->tf_eflags |= FL_IOPL_3; /* set IOPL=3 to allow ring3 to access IO port */
+++        return 0;
+++    }
+++    return 1;
+++}
+++
+++static int do_switch_to_kernel(struct trapframe *tf) {
+++    if (tf->tf_cs != KERNEL_CS) {
+++        cprintf("Switching to kernel...\n");
+++        tf->tf_ds = PROT_MODE_DSEG;
+++        tf->tf_es = PROT_MODE_DSEG;
+++        tf->tf_fs = PROT_MODE_DSEG;
+++        tf->tf_gs = PROT_MODE_DSEG;
+++        tf->tf_ss = PROT_MODE_DSEG;
+++        tf->tf_cs = PROT_MODE_CSEG; /* Code Selector Here */
+++        /* clear bits */
+++        tf->tf_eflags &= ~FL_IOPL_MASK;
+++        /* reset to IOPL=0 */
+++        tf->tf_eflags |= FL_IOPL_0;
+++        return 0;
+++    }
+++    return 1;
+++}
+++
++ /* trap_dispatch - dispatch based on what type of trap occurred */
++ static void
++ trap_dispatch(struct trapframe *tf) {
++@@ -147,10 +200,23 @@
++          * (2) Every TICK_NUM cycle, you can print some info using a funciton, such as print_ticks().
++          * (3) Too Simple? Yes, I think so!
++          */
+++        ticks++;
+++        if (ticks % TICK_NUM == 0) {
+++            print_ticks();
+++        }
++         break;
++     case IRQ_OFFSET + IRQ_COM1:
++         c = cons_getc();
++         cprintf("serial [%03d] %c\n", c, c);
+++        if (c == '0') {
+++            if (!do_switch_to_kernel(tf)) {
+++                print_trapframe(tf);
+++            }
+++        } else if (c == '3') {
+++            if (!do_switch_to_user(tf)) {
+++                print_trapframe(tf);
+++            }
+++        }
++         break;
++     case IRQ_OFFSET + IRQ_KBD:
++         c = cons_getc();
++@@ -158,19 +224,46 @@
++         break;
++     //LAB1 CHALLENGE 1 : YOUR CODE you should modify below codes.
++     case T_SWITCH_TOU:
+++        if (do_switch_to_user(tf)) {
+++            panic("unexpected T_SWITCH_TOU in user space detected.\n");
+++        }
+++        break;
++     case T_SWITCH_TOK:
++-        panic("T_SWITCH_** ??\n");
+++        if (do_switch_to_kernel(tf)) {
+++            panic("unexpected T_SWITCH_TOK in user space detected.\n");
+++        }
+++        break;
+++    case T_SYSCALL:
+++        /* empty statment here to workaround */ ;
+++        uint32_t eax = tf->tf_regs.reg_eax;
+++        cprintf("[syscall] %%eax=0x%02x(%u)\n", eax, eax);
+++        switch (eax) {
+++        case 0xff:
+++            tf->tf_regs.reg_eax = ticks;
+++            cprintf("in kernel, ticks is %u\n", ticks);
+++            break;
+++        default:
+++            panic("unexpected syscall %%eax=0x%02x(%u)\n", eax, eax);
+++        }
++         break;
++     case IRQ_OFFSET + IRQ_IDE1:
++     case IRQ_OFFSET + IRQ_IDE2:
++         /* do nothing */
++         break;
+++    case T_GPFLT: /* general protection fault */
+++        cprintf("General Protection Fault with errno 0x%08x\n", tf->tf_err);
+++        panic("General Protection Fault\n");
+++    break;
++     default:
++         // in kernel, it must be a mistake
++         if ((tf->tf_cs & 3) == 0) {
++             print_trapframe(tf);
++             panic("unexpected trap in kernel.\n");
++         }
+++        uint32_t tn = tf->tf_trapno;
+++        uint32_t en = tf->tf_err;
+++        cprintf("Unexpected uncategoried trap 0x%08x(%u) with errno 0x%08x(%u)\n", tn, tn, en, en);
+++        panic("Unexpected Uncategoried Trap\n");
++     }
++ }
++ 
++diff -r -u -P ../lab2.orin/kern/trap/trapentry.S ./kern/trap/trapentry.S
++--- ../lab2.orin/kern/trap/trapentry.S	2019-10-28 16:21:56.469858835 +0800
+++++ ./kern/trap/trapentry.S	2019-10-28 16:22:01.869858993 +0800
++@@ -18,6 +18,8 @@
++     movw %ax, %es
++ 
++     # push %esp to pass a pointer to the trapframe as an argument to trap()
+++    # esp <- esp - 4
+++    # M[ss:esp] <- SRC
++     pushl %esp
++ 
++     # call trap(tf), where tf=%esp
++@@ -40,5 +42,13 @@
++ 
++     # get rid of the trap number and error code
++     addl $0x8, %esp
+++    # the stack is supposed to be
+++    # Low address -> High address
+++    # 32: eip
+++    # 32: cs (and padding)
+++    # 32: elflags
+++    # (Optional) BELOW ONLY WHEN CROSSING RINGS:
+++    # 32: esp 
+++    # 32: ss (and padding)
++     iret
++ 
+diff -r -u -P ../lab2.orin/libs/logging.h ./libs/logging.h
+--- ../lab2.orin/libs/logging.h	1970-01-01 08:00:00.000000000 +0800
++++ ./libs/logging.h	2019-10-28 16:22:01.869858993 +0800
+@@ -0,0 +1,115 @@
++#ifndef __LIBS_LOGGING_H__
++#define __LIBS_LOGGING_H__
++
++#ifndef __LIBS_DEBUG_CONFIG_
++#define __LIBS_DEBUG_CONFIG_
++
++    /* component identity for logging */
++    #define MMU "MMU"
++    #define PMM "PMM"
++    #define KERNEL "KERNEL"
++
++/* setting logging level */
++    /* set the global logging level */
++    #define LOGGING_LEVEL KDEBUG
++    /* set the logging level for MMU */
++    #define MMU_LOGGING KWARNING
++    #define PMM_LOGGING KINFO
++    #define KERNEL_LOGGING KDEBUG
++
++#endif
++
++#include <defs.h>
++
++extern const char* LOGGING_LEVEL_PRT[];
++extern const uint8_t __logging_raw_cnt_mg_flg__;
++/* Get Logging Level Promt */
++#define GLLP(L) (LOGGING_LEVEL_PRT[L])
++
++#define KDEBUG        0x0
++#define KINFO         0x1
++#define KWARNING      0x2
++#define KERROR        0x3
++#define KPANIC        0x4
++#define KDISABLED_LOG 0xf
++
++#define RAW_LOGGING { const uint8_t __logging_raw_cnt_mg_flg__=1;
++#define ENDR }
++
++#define __LOGGING_PRINT_PROMT(LEVEL, ID) \
++    cprintf("\n[%s] %s:%u - %s\n%s: ", LEVEL, __FILE__, __LINE__, __func__, ID);
++
++#define logf(LEVEL, ID, fmt, ...)                                                                          \
++    do {                                                                                                   \
++        if (LEVEL >= LOGGING_LEVEL && LEVEL >= ID##_LOGGING) {                                          \
++            if (!__logging_raw_cnt_mg_flg__) {                                               \
++                __LOGGING_PRINT_PROMT(GLLP(LEVEL), ID)                                  \
++            } else {                                                                    \
++                cprintf("\t");                                                           \
++            }                                                                             \
++            cprintf(fmt, ##__VA_ARGS__);                                                                   \
++        }                                                                                                  \
++    } while(0)
++
++#define debugf(ID, fmt, ...)                                                                \
++    do {                                                                                    \
++        if (KDEBUG >= LOGGING_LEVEL && KDEBUG >= ID##_LOGGING) {                           \
++            if (!__logging_raw_cnt_mg_flg__) {                                               \
++                __LOGGING_PRINT_PROMT(GLLP(KDEBUG), ID)                                     \
++            } else {                                                                    \
++                cprintf("\t");                                                           \
++            }                                                                             \
++            cprintf(fmt, ##__VA_ARGS__);                                                    \
++        }                                                                                   \
++    } while(0)
++
++#define infof(ID, fmt, ...)                                                                \
++    do {                                                                                    \
++        if (KINFO >= LOGGING_LEVEL && KINFO >= ID##_LOGGING) {                                          \
++            if (!__logging_raw_cnt_mg_flg__) {                       \
++                __LOGGING_PRINT_PROMT(GLLP(KINFO), ID)                                     \
++            } else {                                                                    \
++                cprintf("\t");                                                           \
++            }                                                                             \
++            cprintf(fmt, ##__VA_ARGS__);                                                    \
++        }                                                                                   \
++    } while(0)
++
++#define warnf(ID, fmt, ...)                                                                \
++    do {                                                                                    \
++        if (KWARNING >= LOGGING_LEVEL && KWARNING >= ID##_LOGGING) {                                          \
++            if (!__logging_raw_cnt_mg_flg__) {                       \
++                __LOGGING_PRINT_PROMT(GLLP(KWARNING), ID)                                     \
++            } else {                                                                    \
++                cprintf("\t");                                                           \
++            }                                                                             \
++            cprintf(fmt, ##__VA_ARGS__);                                                    \
++        }                                                                                   \
++    } while(0)
++
++#define errorf(ID, fmt, ...)                                                                \
++    do {                                                                                    \
++        if (KERROR >= LOGGING_LEVEL && KERROR >= ID##_LOGGING) {                                          \
++            if (!__logging_raw_cnt_mg_flg__) {                       \
++                __LOGGING_PRINT_PROMT(GLLP(KERROR), ID)                                     \
++            } else {                                                                    \
++                cprintf("\t");                                                           \
++            }                                                                             \
++            cprintf(fmt, ##__VA_ARGS__);                                                    \
++        }                                                                                   \
++    } while(0)
++
++#define panicf(ID, fmt, ...)                                                                \
++    do {                                                                                    \
++        if (KPANIC >= LOGGING_LEVEL && KPANIC >= ID##_LOGGING) {                                          \
++            if (!__logging_raw_cnt_mg_flg__) {                                              \
++                __LOGGING_PRINT_PROMT(GLLP(KPANIC), ID)                                     \
++            } else {                                                                    \
++                cprintf("\t");                                                           \
++            }                                                                             \
++            cprintf(fmt, ##__VA_ARGS__);                                                    \
++            panic("PANIC: SEE MESSAGE ABOVE");                                              \
++        }                                                                                   \
++    } while(0)
++
++#endif /* !__LIBS__LOGGING_H__ */
+\ No newline at end of file
+diff -r -u -P ../lab2.orin/libs/x86.h ./libs/x86.h
+--- ../lab2.orin/libs/x86.h	2019-10-28 16:21:56.479858836 +0800
++++ ./libs/x86.h	2019-10-28 16:22:01.869858993 +0800
+@@ -127,6 +127,9 @@
+ 
+ static inline void
+ lidt(struct pseudodesc *pd) {
++    // LIDT m16&32
++    // `r` is a register whose value points to the pseudodesc.
++    // (%0) read the memory and retrieve the 6 bytes IDT limit and base.
+     asm volatile ("lidt (%0)" :: "r" (pd) : "memory");
+ }
+ 
+@@ -298,5 +301,17 @@
+ }
+ #endif /* __HAVE_ARCH_MEMCPY */
+ 
++#define max(a,b) ({                   \
++    __typeof__ (a) _a = (a);          \
++    __typeof__ (b) _b = (b);          \
++    _a > _b ? _a : _b;                \
++})
++
++#define min(a,b) ({                   \
++    __typeof__ (a) _a = (a);          \
++    __typeof__ (b) _b = (b);          \
++    _a < _b ? _a : _b;                \
++})
++
+ #endif /* !__LIBS_X86_H__ */
+ 
+diff -r -u -P ../lab2.orin/Makefile ./Makefile
+--- ../lab2.orin/Makefile	2019-10-28 16:21:56.406525499 +0800
++++ ./Makefile	2019-10-28 16:22:01.866525660 +0800
+@@ -247,9 +247,10 @@
+ 	$(V)$(TERMINAL) -e "$(GDB) -q -x tools/gdbinit"
+ 
+ debug-nox: $(UCOREIMG)
+-	$(V)$(QEMU) -S -s -serial mon:stdio $(QEMUOPTS) -nographic &
+-	$(V)sleep 2
+-	$(V)$(TERMINAL) -e "$(GDB) -q -x tools/gdbinit"
++	$(V)$(QEMU) -no-reboot -S -s -serial mon:stdio -hda $< -nographic &
++
++debug-gdb:
++	gdb -q -x tools/gdbinit
+ 
+ .PHONY: grade touch
+ 
+diff -r -u -P ../lab2.orin/tools/gdbinit ./tools/gdbinit
+--- ../lab2.orin/tools/gdbinit	2019-10-28 16:21:56.479858836 +0800
++++ ./tools/gdbinit	2019-10-28 16:22:01.869858993 +0800
+@@ -1,3 +1,7 @@
+ file bin/kernel
+ target remote :1234
+ break kern_init
++define hook-stop
++x/i $pc
++end
++continue
