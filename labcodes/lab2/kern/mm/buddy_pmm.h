@@ -38,7 +38,7 @@
 #define BRO(idx) (idx ^ 0x1)
 
 #define USED(idx) (cont[idx] == 0)
-#define NOT_USED(idx) (!USED(idx))
+#define NOT_USED(idx) (cont[idx] == idx2nodesize(idx))
 
 /** 
  * idx2depth calculate the depth of idx-node.
@@ -68,6 +68,7 @@
 
 #define first_layer(idx) (idx == HEAD)
 #define last_layer(idx) (idx >= buddy_rollup_nr_free)
+#define out_of_range(idx) (idx >= 2 * buddy_rollup_nr_free)
 
 
 extern const struct pmm_manager buddy_pmm_manager;
