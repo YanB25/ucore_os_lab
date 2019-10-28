@@ -243,7 +243,7 @@ pages_check() {
     uint32_t nr_free_store = buddy_nr_free;
     buddy_nr_free = 16;
 
-    struct Page *p0, *p1, *p2, *p3;
+    struct Page *p0, *p1;
     assert((p0 = alloc_pages(16)) != NULL);
     assert(alloc_page() == NULL);
     free_pages(p0, 16);
@@ -273,7 +273,7 @@ random_alloc_check(void) {
     uint32_t nr_free_store = buddy_nr_free;
     buddy_nr_free = 16;
 
-    struct Page *p0, *p1, *p2;
+    struct Page *p0, *p1;
     assert((p0 = alloc_pages(7)) != NULL);
     assert((p1 = alloc_pages(3)) != NULL);
     struct Page* page[4];
