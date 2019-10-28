@@ -6,6 +6,7 @@
 
     /* component identity for logging */
     #define MMU "MMU"
+    #define PMM "PMM"
     #define KERNEL "KERNEL"
 
 /* setting logging level */
@@ -13,6 +14,7 @@
     #define LOGGING_LEVEL KDEBUG
     /* set the logging level for MMU */
     #define MMU_LOGGING KWARNING
+    #define PMM_LOGGING KINFO
     #define KERNEL_LOGGING KDEBUG
 
 #endif

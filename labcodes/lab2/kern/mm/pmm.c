@@ -8,6 +8,10 @@
 #include <buddy_pmm.h>
 #include <sync.h>
 #include <error.h>
+#include <logging.h>
+
+#define pmm_infof(fmt, ...) \
+    infof(PMM, fmt, ##__VA_ARGS__)
 
 /* *
  * Task State Segment:
@@ -140,7 +144,7 @@ static void
 init_pmm_manager(void) {
     // pmm_manager = &default_pmm_manager;
     pmm_manager = &buddy_pmm_manager;
-    cprintf("memory management: %s\n", pmm_manager->name);
+    pmm_infof("memory management: %s\n", pmm_manager->name);
     pmm_manager->init();
 }
 
@@ -194,12 +198,14 @@ page_init(void) {
     struct e820map *memmap = (struct e820map *)(0x8000 + KERNBASE);
     uint64_t maxpa = 0;
 
-    cprintf("e820map:\n");
+    pmm_infof("e820map:\n");
     int i;
     for (i = 0; i < memmap->nr_map; i ++) {
         uint64_t begin = memmap->map[i].addr, end = begin + memmap->map[i].size;
-        cprintf("  memory: %08llx, [%08llx, %08llx], type = %d.\n",
+        RAW_LOGGING
+        pmm_infof("  memory: %08llx, [%08llx, %08llx], type = %d.\n",
                 memmap->map[i].size, begin, end - 1, memmap->map[i].type);
+        ENDR
         if (memmap->map[i].type == E820_ARM) {
             if (maxpa < end && begin < KMEMSIZE) {
                 maxpa = end;
@@ -499,7 +505,7 @@ tlb_invalidate(pde_t *pgdir, uintptr_t la) {
 static void
 check_alloc_page(void) {
     pmm_manager->check();
-    cprintf("check_alloc_page() succeeded!\n");
+    pmm_infof("check_alloc_page() succeeded!\n");
 }
 
 static void
@@ -547,7 +553,7 @@ check_pgdir(void) {
     free_page(pde2page(boot_pgdir[0]));
     boot_pgdir[0] = 0;
 
-    cprintf("check_pgdir() succeeded!\n");
+    pmm_infof("check_pgdir() succeeded!\n");
 }
 
 static void
@@ -581,7 +587,7 @@ check_boot_pgdir(void) {
     free_page(pde2page(boot_pgdir[0]));
     boot_pgdir[0] = 0;
 
-    cprintf("check_boot_pgdir() succeeded!\n");
+    pmm_infof("check_boot_pgdir() succeeded!\n");
 }
 
 //perm2str - use string 'u,r,w,-' to present the permission
@@ -633,17 +639,19 @@ get_pgtable_items(size_t left, size_t right, size_t start, uintptr_t *table, siz
 //print_pgdir - print the PDT&PT
 void
 print_pgdir(void) {
-    cprintf("-------------------- BEGIN --------------------\n");
+    RAW_LOGGING
+    pmm_infof("-------------------- BEGIN --------------------\n");
     size_t left, right = 0, perm;
     while ((perm = get_pgtable_items(0, NPDEENTRY, right, vpd, &left, &right)) != 0) {
-        cprintf("PDE(%03x) %08x-%08x %08x %s\n", right - left,
+        pmm_infof("PDE(%03x) %08x-%08x %08x %s\n", right - left,
                 left * PTSIZE, right * PTSIZE, (right - left) * PTSIZE, perm2str(perm));
         size_t l, r = left * NPTEENTRY;
         while ((perm = get_pgtable_items(left * NPTEENTRY, right * NPTEENTRY, r, vpt, &l, &r)) != 0) {
-            cprintf("  |-- PTE(%05x) %08x-%08x %08x %s\n", r - l,
+            pmm_infof("  |-- PTE(%05x) %08x-%08x %08x %s\n", r - l,
                     l * PGSIZE, r * PGSIZE, (r - l) * PGSIZE, perm2str(perm));
         }
     }
-    cprintf("--------------------- END ---------------------\n");
+    pmm_infof("--------------------- END ---------------------\n");
+    ENDR
 }
 
