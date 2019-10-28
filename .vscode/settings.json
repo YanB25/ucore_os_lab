@@ -1,6 +1,7 @@
 {
     "files.associations": {
         "stdio.h": "c",
-        "buddy_pmm.h": "c"
+        "buddy_pmm.h": "c",
+        "string.h": "c"
     }
 }
