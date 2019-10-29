@@ -5,7 +5,7 @@
 #include <mmu.h>
 #include <memlayout.h>
 #include <pmm.h>
-#include <buddy_pmm.h>
+#include <default_pmm.h>
 #include <sync.h>
 #include <error.h>
 #include <swap.h>
@@ -14,6 +14,8 @@
 
 #define pmm_infof(fmt, ...) \
     infof(PMM, fmt, ##__VA_ARGS__)
+#define pmm_warnf(fmt, ...) \
+    warnf(PMM, fmt, ##__VA_ARGS__)
 
 /* *
  * Task State Segment:
@@ -144,8 +146,13 @@ gdt_init(void) {
 //init_pmm_manager - initialize a pmm_manager instance
 static void
 init_pmm_manager(void) {
-    // pmm_manager = &default_pmm_manager;
-    pmm_manager = &buddy_pmm_manager;
+    pmm_manager = &default_pmm_manager;
+    /**
+     * FIXME: buddy_pmm_manager does not use and maintain free_area_t.
+     * Thus, it fails at swap.c, check_swap when iterating free_list.
+     * Try to fix this, make buddy_pmm_manager work as expect.
+     */
+    // pmm_manager = &buddy_pmm_manager;
     pmm_infof("memory management: %s\n", pmm_manager->name);
     pmm_manager->init();
 }
@@ -487,6 +494,7 @@ int
 page_insert(pde_t *pgdir, struct Page *page, uintptr_t la, uint32_t perm) {
     pte_t *ptep = get_pte(pgdir, la, 1);
     if (ptep == NULL) {
+        pmm_warnf("fail to get_pte for la=0x%08x, possibly no memory.", la);
         return -E_NO_MEM;
     }
     page_ref_inc(page);

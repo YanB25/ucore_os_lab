@@ -2,6 +2,15 @@
 #include <list.h>
 #include <string.h>
 #include <default_pmm.h>
+#include <logging.h>
+
+#define pmm_debugf(fmt, ...) \
+    debugf(PMM, fmt, ##__VA_ARGS__)
+#define pmm_infof(fmt, ...) \
+    infof(PMM, fmt, ##__VA_ARGS__)
+#define pmm_warnf(fmt, ...) \
+    warnf(PMM, fmt, ##__VA_ARGS__)
+
 
 /*  In the First Fit algorithm, the allocator keeps a list of free blocks
  * (known as the free list). Once receiving a allocation request for memory,
@@ -148,7 +157,7 @@ default_alloc_pages(size_t n) {
         ClearPageProperty(page);
     }
     if (page == NULL) {
-        cprintf("[MMU] alloc fails\n");
+        pmm_warnf("alloc fails\n");
     }
     else if (n > 1) {
         struct Page* end_page = page + n - 1;
@@ -156,12 +165,12 @@ default_alloc_pages(size_t n) {
         ppn_t eppn = bppn + n - 1;
         uintptr_t bpa = page2pa(page);
         uintptr_t epa = page2pa(end_page);
-        cprintf("[MMU] alloc %u pages (%u-%u) @0x%08x - @0x%08x\n", n, bppn, eppn, bpa, epa);
+        pmm_infof("alloc %u pages (%u-%u) @0x%08x - @0x%08x\n", n, bppn, eppn, bpa, epa);
     } else {
         assert(n == 1);
         ppn_t ppn = page2ppn(page);
         uintptr_t pa = page2pa(page);
-        cprintf("[MMU] alloc 1 page (%u) @0x%08x\n", ppn, pa);
+        pmm_infof("alloc 1 page (%u) @0x%08x\n", ppn, pa);
     }
     return page;
 }
@@ -171,6 +180,20 @@ default_free_pages(struct Page *base, size_t n) {
     assert(n > 0);
     struct Page *p = base;
     struct Page *back_page = base;
+
+    /* freeing report below */
+    if (n > 1) {
+        ppn_t bppn = page2ppn(back_page);
+        ppn_t eppn = bppn + n - 1;
+        intptr_t bpa = page2pa(back_page);
+        intptr_t epa = page2pa(back_page + n - 1);
+        pmm_infof("[MMU] free %u pages (%u-%u) @0x%08x - @0x%08x\n", n, bppn, eppn, bpa, epa);
+    } else {
+        ppn_t ppn = page2ppn(back_page);
+        intptr_t pa = page2pa(back_page);
+        pmm_infof("[MMU] free 1 page (%u) @0x%08x\n", ppn, pa);
+    }
+
     for (; p != base + n; p ++) {
         assert(!PageReserved(p) && !PageProperty(p));
         p->flags = 0;
@@ -186,29 +209,17 @@ default_free_pages(struct Page *base, size_t n) {
             base->property += p->property;
             ClearPageProperty(p);
             list_del(&(p->page_link));
-            cprintf("   [MMU] freeing step: merging right pages %u\n", page2ppn(p));
+            RAW_LOGGING pmm_debugf("freeing step: merging right pages %u\n", page2ppn(p)); ENDR
         }
         else if (p + p->property == base) {
             p->property += base->property;
             ClearPageProperty(base);
             base = p;
             list_del(&(p->page_link));
-            cprintf("   [MMU] freeing step: merging left pages %u\n", page2ppn(p));
+            RAW_LOGGING pmm_debugf("freeing step: merging left pages %u\n", page2ppn(p)); ENDR
         }
     }
 
-    /* freeing report below */
-    if (n > 1) {
-        ppn_t bppn = page2ppn(back_page);
-        ppn_t eppn = bppn + n - 1;
-        intptr_t bpa = page2pa(back_page);
-        intptr_t epa = page2pa(back_page + n - 1);
-        cprintf("[MMU] free %u pages (%u-%u) @0x%08x - @0x%08x\n", n, bppn, eppn, bpa, epa);
-    } else {
-        ppn_t ppn = page2ppn(back_page);
-        intptr_t pa = page2pa(back_page);
-        cprintf("[MMU] free 1 page (%u) @0x%08x\n", ppn, pa);
-    }
 
     nr_free += n;
     if (list_empty(&free_list)) {

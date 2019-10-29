@@ -7,15 +7,19 @@
     /* component identity for logging */
     #define MMU "MMU"
     #define PMM "PMM"
-    #define KERNEL "KERNEL"
+    #define VMM "VMM"
+    #define SWAP "SWAP" 
+    #define KERNEL "KERNEL" 
 
-/* setting logging level */
+    /* setting logging level */
     /* set the global logging level */
     #define LOGGING_LEVEL KDEBUG
     /* set the logging level for MMU */
-    #define MMU_LOGGING KWARNING
-    #define PMM_LOGGING KINFO
-    #define KERNEL_LOGGING KDEBUG
+    #define MMU_LOGGING          KWARNING
+    #define PMM_LOGGING          KWARNING
+    #define VMM_LOGGING          KDEBUG
+    #define SWAP_LOGGING         KDEBUG
+    #define KERNEL_LOGGING       KDEBUG
 
 #endif
 

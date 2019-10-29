@@ -10,6 +10,12 @@
 #include <vmm.h>
 #include <swap.h>
 #include <kdebug.h>
+#include <logging.h>
+
+#define kern_debugf(fmt, ...) \
+    debugf(KERNEL, fmt, ##__VA_ARGS__)
+#define kern_infof(fmt, ...) \
+    infof(KERNEL, fmt, ##__VA_ARGS__)
 
 #define TICK_NUM 100
 // number of interrupt that is reserved by intel
@@ -198,7 +204,7 @@ print_pgfault(struct trapframe *tf) {
      * bit 1 == 0 means read, 1 means write
      * bit 2 == 0 means kernel, 1 means user
      * */
-    cprintf("page fault at 0x%08x: %c/%c [%s].\n", rcr2(),
+    kern_infof("page fault at 0x%08x: %c/%c [%s].\n", rcr2(),
             (tf->tf_err & 4) ? 'U' : 'K',
             (tf->tf_err & 2) ? 'W' : 'R',
             (tf->tf_err & 1) ? "protection fault" : "no page found");
@@ -225,6 +231,7 @@ trap_dispatch(struct trapframe *tf) {
 
     switch (tf->tf_trapno) {
     case T_PGFLT:  //page fault
+        kern_debugf("Page Fault Trap handling begin...\n");
         if ((ret = pgfault_handler(tf)) != 0) {
             print_trapframe(tf);
             panic("handle pgfault failed. %e\n", ret);
