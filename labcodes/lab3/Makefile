@@ -240,9 +240,8 @@ debug: $(UCOREIMG) $(SWAPIMG)
 	$(V)sleep 2
 	$(V)$(TERMINAL) -e "$(GDB) -q -x tools/gdbinit"
 
-debug-nox: $(UCOREIMG) $(SWAPIMG)
+debug-qemu: $(UCOREIMG) $(SWAPIMG)
 	$(V)$(QEMU) -no-reboot -S -s -serial mon:stdio -hda $< -nographic &
-
 debug-gdb:
 	gdb -q -x tools/gdbinit
 
