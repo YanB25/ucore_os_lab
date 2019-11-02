@@ -11,6 +11,12 @@
 #include <swap.h>
 #include <vmm.h>
 #include <kmalloc.h>
+#include <logging.h>
+
+#define pmm_infof(fmt, ...) \
+    infof(PMM, fmt, ##__VA_ARGS__)
+#define pmm_warnf(fmt, ...) \
+    warnf(PMM, fmt, ##__VA_ARGS__)
 
 /* *
  * Task State Segment:

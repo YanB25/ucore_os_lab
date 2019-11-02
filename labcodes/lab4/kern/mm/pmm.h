@@ -6,12 +6,6 @@
 #include <memlayout.h>
 #include <atomic.h>
 #include <assert.h>
-#include <logging.h>
-
-#define pmm_infof(fmt, ...) \
-    infof(PMM, fmt, ##__VA_ARGS__)
-#define pmm_warnf(fmt, ...) \
-    warnf(PMM, fmt, ##__VA_ARGS__)
 
 /* fork flags used in do_fork*/
 #define CLONE_VM            0x00000100  // set if VM shared between processes
