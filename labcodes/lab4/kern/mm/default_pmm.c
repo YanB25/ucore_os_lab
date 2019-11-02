@@ -125,7 +125,7 @@ default_init_memmap(struct Page *base, size_t n) {
     base->property = n;
     SetPageProperty(base);
     nr_free += n;
-    list_add(&free_list, &(base->page_link));
+    list_add_before(&free_list, &(base->page_link));
 }
 
 static struct Page *
@@ -144,15 +144,15 @@ default_alloc_pages(size_t n) {
         }
     }
     if (page != NULL) {
-        list_del(&(page->page_link));
         if (page->property > n) {
             struct Page *p = page + n;
             assert(!PageReserved(p));
 
             p->property = page->property - n;
             SetPageProperty(p);
-            list_add(&free_list, &(p->page_link));
+            list_add_after(&(page->page_link), &(p->page_link));
         }
+        list_del(&(page->page_link));
         nr_free -= n;
         ClearPageProperty(page);
     }
@@ -222,23 +222,34 @@ default_free_pages(struct Page *base, size_t n) {
 
 
     nr_free += n;
-    if (list_empty(&free_list)) {
-        list_add(&free_list, &(base->page_link));
-    } else {
-        list_entry_t *le = list_next(&free_list);
-        struct Page* cur_page = le2page(le, page_link);
-        while (cur_page < base && list_next(le) != &free_list) {
-            le = list_next(le);
-            cur_page = le2page(le, page_link);
+    // if (list_empty(&free_list)) {
+    //     list_add(&free_list, &(base->page_link));
+    // } else {
+    //     list_entry_t *le = list_next(&free_list);
+    //     struct Page* cur_page = le2page(le, page_link);
+    //     while (cur_page < base && list_next(le) != &free_list) {
+    //         le = list_next(le);
+    //         cur_page = le2page(le, page_link);
+    //     }
+    //     assert(cur_page != base);
+    //     if (cur_page < base) {
+    //         list_add_after(le, &(base->page_link));
+    //     } else {
+    //         /* cur_age > base */
+    //         list_add_before(le, &(base->page_link));
+    //     }
+    // }
+
+    le = list_next(&free_list);
+    while (le != &free_list) {
+        p = le2page(le, page_link);
+        if (base + base->property <= p) {
+            assert(base + base->property != p);
+            break;
         }
-        assert(cur_page != base);
-        if (cur_page < base) {
-            list_add_after(le, &(base->page_link));
-        } else {
-            /* cur_age > base */
-            list_add_before(le, &(base->page_link));
-        }
+        le = list_next(le);
     }
+    list_add_before(le, &(base->page_link));
 }
 
 static size_t
