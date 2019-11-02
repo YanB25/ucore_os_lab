@@ -242,6 +242,8 @@ debug: $(UCOREIMG) $(SWAPIMG)
 
 debug-nox: $(UCOREIMG) $(SWAPIMG)
 	$(V)$(QEMU) -no-reboot -S -s -serial mon:stdio -hda $< -nographic &
+debug-qemu: $(UCOREIMG) $(SWAPIMG)
+	$(V)$(QEMU) -S -s -parallel stdio $(QEMUOPTS) -serial null &
 
 debug-gdb:
 	gdb -q -x tools/gdbinit
