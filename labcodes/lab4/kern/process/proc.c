@@ -102,6 +102,18 @@ alloc_proc(void) {
      *       uint32_t flags;                             // Process flag
      *       char name[PROC_NAME_LEN + 1];               // Process name
      */
+        proc->state = PROC_UNINIT;
+        proc->pid = -1;
+        proc->runs = 0;
+        proc->kstack = 0; 
+        proc->need_resched = 0;
+        proc->parent = NULL;
+        memset(&(proc->context), 0, sizeof(struct context));
+        proc->mm = NULL;
+        proc->tf = NULL;
+        proc->cr3 = boot_cr3;
+        proc->flags = 0; /* TODO: ? */
+        proc->name[0] = '\0';
     }
     return proc;
 }
@@ -168,6 +180,10 @@ proc_run(struct proc_struct *proc) {
             current = proc;
             load_esp0(next->kstack + KSTACKSIZE);
             lcr3(next->cr3);
+            /**
+             * below command is implemented as ABSOLUTE NEAR CALL 
+             * only 32-bit eip is pushed 
+             * */
             switch_to(&(prev->context), &(next->context));
         }
         local_intr_restore(intr_flag);
@@ -215,6 +231,7 @@ kernel_thread(int (*fn)(void *), void *arg, uint32_t clone_flags) {
     tf.tf_regs.reg_ebx = (uint32_t)fn;
     tf.tf_regs.reg_edx = (uint32_t)arg;
     tf.tf_eip = (uint32_t)kernel_thread_entry;
+    /* it is kernel thread, no need to alloc page for stack, 0 is fine */
     return do_fork(clone_flags | CLONE_VM, 0, &tf);
 }
 
@@ -296,6 +313,18 @@ do_fork(uint32_t clone_flags, uintptr_t stack, struct trapframe *tf) {
     //    5. insert proc_struct into hash_list && proc_list
     //    6. call wakeup_proc to make the new child process RUNNABLE
     //    7. set ret vaule using child proc's pid
+    struct proc_struct *procp = alloc_proc();
+    if (procp == NULL) {
+        proc_warnf("could not alloc process.");
+    }
+    setup_kstack(procp);
+    copy_mm(clone_flags, procp);
+    copy_thread(procp, stack, tf);
+    ret = procp->pid = get_pid();
+    hash_proc(procp);
+    list_add(&proc_list, &(procp->list_link));
+    wakeup_proc(procp);
+
 fork_out:
     return ret;
 

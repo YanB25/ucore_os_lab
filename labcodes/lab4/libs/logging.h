@@ -9,6 +9,7 @@
     #define PMM "PMM"
     #define VMM "VMM"
     #define SWAP "SWAP" 
+    #define PROC "PROC"
     #define KERNEL "KERNEL" 
 
     /* setting logging level */
@@ -16,10 +17,11 @@
     #define LOGGING_LEVEL KDEBUG
     /* set the logging level for MMU */
     #define MMU_LOGGING          KWARNING
-    #define PMM_LOGGING          KINFO
-    #define VMM_LOGGING          KDEBUG
-    #define SWAP_LOGGING         KDEBUG
-    #define KERNEL_LOGGING       KDEBUG
+    #define PMM_LOGGING          KWARNING
+    #define VMM_LOGGING          KINFO
+    #define SWAP_LOGGING         KWARNING
+    #define PROC_LOGGING         KDEBUG
+    #define KERNEL_LOGGING       KINFO
 
 #endif
 

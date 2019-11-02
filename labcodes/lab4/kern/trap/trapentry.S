@@ -52,8 +52,11 @@ __trapret:
     # 32: ss (and padding)
     iret
 
+# call graph: switch_to --> forkret(by modify stack and ret)
+#     --> forkrets --> jump to __trapret
 .globl forkrets
 forkrets:
     # set stack to this new process's trapframe
+    # call to here, 4(%esp) = first parameter = current->tf
     movl 4(%esp), %esp
     jmp __trapret
