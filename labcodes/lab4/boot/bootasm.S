@@ -43,28 +43,29 @@ seta20.2:
     movb $0xdf, %al                                 # 0xdf -> port 0x60
     outb %al, $0x60                                 # 0xdf = 11011111, means set P2's A20 bit(the 1 bit) to 1
 
+# we store the memory info into 0x8000
 probe_memory:
     movl $0, 0x8000
-    xorl %ebx, %ebx
-    movw $0x8004, %di
+    xorl %ebx, %ebx                                 # 0 for the first probe. An int for the probing count.
+    movw $0x8004, %di                               # es:di the buffer address.
 start_probe:
-    movl $0xE820, %eax
-    movl $20, %ecx
-    movl $SMAP, %edx
+    movl $0xE820, %eax                              # int codes
+    movl $20, %ecx                                  # available buffer size. Required to be larger than 20
+    movl $SMAP, %edx                                # Magic Number, ascii for "SMAP"
     int $0x15
-    jnc cont
-    movw $12345, 0x8000
+    jnc cont                                        # if `int 0x15` succeeds, CF is clear, so jump to cont.
+    movw $12345, 0x8000                             # `int 0x15` fails, write magic number and finish
     jmp finish_probe
 cont:
     addw $20, %di
     incl 0x8000
-    cmpl $0, %ebx
+    cmpl $0, %ebx                                   # 0 if probe succeeds and finishes.
     jnz start_probe
 finish_probe:
 
     # Switch from real to protected mode, using a bootstrap GDT
     # and segment translation that makes virtual addresses
-    # identical to physical addresses, so that the
+    # **identical** to physical addresses, so that the
     # effective memory map does not change during the switch.
     lgdt gdtdesc
     movl %cr0, %eax
