@@ -16,7 +16,7 @@
     #define LOGGING_LEVEL KDEBUG
     /* set the logging level for MMU */
     #define MMU_LOGGING          KWARNING
-    #define PMM_LOGGING          KWARNING
+    #define PMM_LOGGING          KINFO
     #define VMM_LOGGING          KDEBUG
     #define SWAP_LOGGING         KDEBUG
     #define KERNEL_LOGGING       KDEBUG

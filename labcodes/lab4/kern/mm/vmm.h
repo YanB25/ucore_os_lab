@@ -5,16 +5,6 @@
 #include <list.h>
 #include <memlayout.h>
 #include <sync.h>
-#include <logging.h>
-
-#define vmm_debugf(fmt, ...) \
-    debugf(VMM, fmt, ##__VA_ARGS__)
-#define vmm_warnf(fmt, ...) \
-    warnf(VMM, fmt, ##__VA_ARGS__)
-#define vmm_errorf(fmt, ...) \
-    errorf(VMM, fmt, ##__VA_ARGS__)
-#define vmm_panicf(fmt, ...) \
-    panicf(VMM, fmt, ##__VA_ARGS__)
 
 //pre define
 struct mm_struct;

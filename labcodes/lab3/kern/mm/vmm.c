@@ -266,6 +266,7 @@ check_pgfault(void) {
     assert(find_vma(mm, addr) == vma);
 
     int i, sum = 0;
+    vmm_debugf("begin to write 0x%08x\n", addr);
     for (i = 0; i < 100; i ++) {
         *(char *)(addr + i) = i;
         sum += i;

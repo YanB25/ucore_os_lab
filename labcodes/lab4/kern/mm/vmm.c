@@ -8,6 +8,16 @@
 #include <x86.h>
 #include <swap.h>
 #include <kmalloc.h>
+#include <logging.h>
+
+#define vmm_debugf(fmt, ...) \
+    debugf(VMM, fmt, ##__VA_ARGS__)
+#define vmm_warnf(fmt, ...) \
+    warnf(VMM, fmt, ##__VA_ARGS__)
+#define vmm_errorf(fmt, ...) \
+    errorf(VMM, fmt, ##__VA_ARGS__)
+#define vmm_panicf(fmt, ...) \
+    panicf(VMM, fmt, ##__VA_ARGS__)
 
 /* 
   vmm design include two parts: mm_struct (mm) & vma_struct (vma)
@@ -253,13 +263,16 @@ check_pgfault(void) {
     assert(find_vma(mm, addr) == vma);
 
     int i, sum = 0;
+    vmm_debugf("begin to write from addr @0x%08x\n", addr);
     for (i = 0; i < 100; i ++) {
+        RAW_LOGGING vmm_debugf("writing @0x%08x with value %u\n", (char *) addr + i, i); ENDR
         *(char *)(addr + i) = i;
         sum += i;
     }
     for (i = 0; i < 100; i ++) {
         sum -= *(char *)(addr + i);
     }
+    vmm_debugf("pgdir[0]=0x%08x\n", pgdir[0]);
     assert(sum == 0);
 
     page_remove(pgdir, ROUNDDOWN(addr, PGSIZE));
@@ -300,6 +313,7 @@ volatile unsigned int pgfault_num=0;
  */
 int
 do_pgfault(struct mm_struct *mm, uint32_t error_code, uintptr_t addr) {
+    cprintf("TODO: begin do_pgfault\n");
     int ret = -E_INVAL;
     //try to find a vma which include addr
     struct vma_struct *vma = find_vma(mm, addr);
