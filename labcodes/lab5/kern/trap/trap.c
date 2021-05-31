@@ -324,10 +324,6 @@ trap_dispatch(struct trapframe *tf) {
     case IRQ_OFFSET + IRQ_IDE2:
         /* do nothing */
         break;
-    case T_GPFLT: /* general protection fault */
-        cprintf("General Protection Fault with errno 0x%08x\n", tf->tf_err);
-        panic("General Protection Fault\n");
-    break;
     default:
         print_trapframe(tf);
         if (current != NULL) {

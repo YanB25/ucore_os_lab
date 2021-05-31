@@ -56,7 +56,7 @@ _fifo_map_swappable(struct mm_struct *mm, uintptr_t addr, struct Page *page, int
     /*LAB3 EXERCISE 2: YOUR CODE*/ 
     //(1)link the most recent arrival page at the back of the pra_list_head qeueue.
     swap_debugf("call list_add_before to add entry to head\n");
-    list_add_before(head, entry);
+    list_add(head, entry);
     return 0;
 }
 /*
