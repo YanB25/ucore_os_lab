@@ -148,7 +148,7 @@ init_pmm_manager(void) {
      * Try to fix this, make buddy_pmm_manager work as expect.
      */
     // pmm_manager = &buddy_pmm_manager;
-    pmm_infof("memory management: %s\n", pmm_manager->name);
+    cprintf("memory management: %s\n", pmm_manager->name);
     pmm_manager->init();
 }
 
