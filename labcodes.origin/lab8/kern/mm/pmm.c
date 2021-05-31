@@ -35,7 +35,6 @@
 static struct taskstate ts = {0};
 
 // virtual address of physicall page array
-// pages was set to where larger than `end`
 struct Page *pages;
 // amount of physical memory (in pages)
 size_t npage = 0;
@@ -142,13 +141,7 @@ gdt_init(void) {
 static void
 init_pmm_manager(void) {
     pmm_manager = &default_pmm_manager;
-    /**
-     * FIXME: buddy_pmm_manager does not use and maintain free_area_t.
-     * Thus, it fails at swap.c, check_swap when iterating free_list.
-     * Try to fix this, make buddy_pmm_manager work as expect.
-     */
-    // pmm_manager = &buddy_pmm_manager;
-    pmm_infof("memory management: %s\n", pmm_manager->name);
+    cprintf("memory management: %s\n", pmm_manager->name);
     pmm_manager->init();
 }
 
@@ -238,7 +231,6 @@ page_init(void) {
         SetPageReserved(pages + i);
     }
 
-    /* essentially return addr - KERNBASE */
     uintptr_t freemem = PADDR((uintptr_t)pages + sizeof(struct Page) * npage);
 
     for (i = 0; i < memmap->nr_map; i ++) {
@@ -383,35 +375,6 @@ get_pte(pde_t *pgdir, uintptr_t la, bool create) {
     }
     return NULL;          // (8) return page table entry
 #endif
-    uint32_t pdx = PDX(la);
-    pde_t *pdep = &pgdir[pdx];
-    pte_t *pt = NULL; /* page table */
-
-    /* if page directory entry not exists */
-    if (!(*pdep & PTE_P)) {
-        if (create) {
-            struct Page* new_pd_page = alloc_page();
-            if (new_pd_page == NULL) {
-                return NULL; /* no memory */
-            }
-            set_page_ref(new_pd_page, 1);
-
-            uintptr_t pd_pa = page2pa(new_pd_page);
-            uintptr_t pd_la = (uintptr_t) KADDR(pd_pa);
-
-            pt = (pte_t *) pd_la; /* set newly alloc page's address to PT's address */
-            memset(pt, 0, PGSIZE);
-            SET_PDE(pdep, pd_pa, PTE_USER); /* use pa here */
-
-        } else {
-            return NULL;
-        }
-    } else {
-        /* pde exists */
-        pt = KADDR(PDE_ADDR(*pdep));
-    }
-    /* PT must exist here */
-    return pt + PTX(la);
 }
 
 //get_page - get related Page struct for linear address la using PDT pgdir
@@ -457,17 +420,92 @@ page_remove_pte(pde_t *pgdir, uintptr_t la, pte_t *ptep) {
                                   //(6) flush tlb
     }
 #endif
-    if (*ptep & PTE_P) {
-        struct Page* page = pte2page(*ptep);
-        page_ref_dec(page);
-        if (page_ref(page) == 0) {
-            /* this page should be freed */
-            free_page(page);
-        }
-        *ptep = 0;
-        tlb_invalidate(pgdir, la);
-    }
+}
 
+void
+unmap_range(pde_t *pgdir, uintptr_t start, uintptr_t end) {
+    assert(start % PGSIZE == 0 && end % PGSIZE == 0);
+    assert(USER_ACCESS(start, end));
+
+    do {
+        pte_t *ptep = get_pte(pgdir, start, 0);
+        if (ptep == NULL) {
+            start = ROUNDDOWN(start + PTSIZE, PTSIZE);
+            continue ;
+        }
+        if (*ptep != 0) {
+            page_remove_pte(pgdir, start, ptep);
+        }
+        start += PGSIZE;
+    } while (start != 0 && start < end);
+}
+
+void
+exit_range(pde_t *pgdir, uintptr_t start, uintptr_t end) {
+    assert(start % PGSIZE == 0 && end % PGSIZE == 0);
+    assert(USER_ACCESS(start, end));
+
+    start = ROUNDDOWN(start, PTSIZE);
+    do {
+        int pde_idx = PDX(start);
+        if (pgdir[pde_idx] & PTE_P) {
+            free_page(pde2page(pgdir[pde_idx]));
+            pgdir[pde_idx] = 0;
+        }
+        start += PTSIZE;
+    } while (start != 0 && start < end);
+}
+/* copy_range - copy content of memory (start, end) of one process A to another process B
+ * @to:    the addr of process B's Page Directory
+ * @from:  the addr of process A's Page Directory
+ * @share: flags to indicate to dup OR share. We just use dup method, so it didn't be used.
+ *
+ * CALL GRAPH: copy_mm-->dup_mmap-->copy_range
+ */
+int
+copy_range(pde_t *to, pde_t *from, uintptr_t start, uintptr_t end, bool share) {
+    assert(start % PGSIZE == 0 && end % PGSIZE == 0);
+    assert(USER_ACCESS(start, end));
+    // copy content by page unit.
+    do {
+        //call get_pte to find process A's pte according to the addr start
+        pte_t *ptep = get_pte(from, start, 0), *nptep;
+        if (ptep == NULL) {
+            start = ROUNDDOWN(start + PTSIZE, PTSIZE);
+            continue ;
+        }
+        //call get_pte to find process B's pte according to the addr start. If pte is NULL, just alloc a PT
+        if (*ptep & PTE_P) {
+            if ((nptep = get_pte(to, start, 1)) == NULL) {
+                return -E_NO_MEM;
+            }
+        uint32_t perm = (*ptep & PTE_USER);
+        //get page from ptep
+        struct Page *page = pte2page(*ptep);
+        // alloc a page for process B
+        struct Page *npage=alloc_page();
+        assert(page!=NULL);
+        assert(npage!=NULL);
+        int ret=0;
+        /* LAB5:EXERCISE2 YOUR CODE
+         * replicate content of page to npage, build the map of phy addr of nage with the linear addr start
+         *
+         * Some Useful MACROs and DEFINEs, you can use them in below implementation.
+         * MACROs or Functions:
+         *    page2kva(struct Page *page): return the kernel vritual addr of memory which page managed (SEE pmm.h)
+         *    page_insert: build the map of phy addr of an Page with the linear addr la
+         *    memcpy: typical memory copy function
+         *
+         * (1) find src_kvaddr: the kernel virtual address of page
+         * (2) find dst_kvaddr: the kernel virtual address of npage
+         * (3) memory copy from src_kvaddr to dst_kvaddr, size is PGSIZE
+         * (4) build the map of phy addr of  nage with the linear addr start
+         */
+        assert(ret == 0);
+        }
+        start += PGSIZE;
+    } while (start != 0 && start < end);
+    return 0;
 }
 
 //page_remove - free an Page which is related linear address la and has an validated pte
@@ -491,7 +529,6 @@ int
 page_insert(pde_t *pgdir, struct Page *page, uintptr_t la, uint32_t perm) {
     pte_t *ptep = get_pte(pgdir, la, 1);
     if (ptep == NULL) {
-        pmm_warnf("fail to get_pte for la=0x%08x, possibly no memory.", la);
         return -E_NO_MEM;
     }
     page_ref_inc(page);
@@ -530,10 +567,18 @@ pgdir_alloc_page(pde_t *pgdir, uintptr_t la, uint32_t perm) {
             return NULL;
         }
         if (swap_init_ok){
-            swap_map_swappable(check_mm_struct, la, page, 0);
-            page->pra_vaddr=la;
-            assert(page_ref(page) == 1);
-            //cprintf("get No. %d  page: pra_vaddr %x, pra_link.prev %x, pra_link_next %x in pgdir_alloc_page\n", (page-pages), page->pra_vaddr,page->pra_page_link.prev, page->pra_page_link.next);
+            if(check_mm_struct!=NULL) {
+                swap_map_swappable(check_mm_struct, la, page, 0);
+                page->pra_vaddr=la;
+                assert(page_ref(page) == 1);
+                //cprintf("get No. %d  page: pra_vaddr %x, pra_link.prev %x, pra_link_next %x in pgdir_alloc_page\n", (page-pages), page->pra_vaddr,page->pra_page_link.prev, page->pra_page_link.next);
+            } 
+            else  {  //now current is existed, should fix it in the future
+                //swap_map_swappable(current->mm, la, page, 0);
+                //page->pra_vaddr=la;
+                //assert(page_ref(page) == 1);
+                //panic("pgdir_alloc_page: no pages. now current is existed, should fix it in the future\n");
+            }
         }
 
     }
