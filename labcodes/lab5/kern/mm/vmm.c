@@ -8,6 +8,16 @@
 #include <x86.h>
 #include <swap.h>
 #include <kmalloc.h>
+#include <logging.h>
+
+#define vmm_debugf(fmt, ...) \
+    debugf(VMM, fmt, ##__VA_ARGS__)
+#define vmm_warnf(fmt, ...) \
+    warnf(VMM, fmt, ##__VA_ARGS__)
+#define vmm_errorf(fmt, ...) \
+    errorf(VMM, fmt, ##__VA_ARGS__)
+#define vmm_panicf(fmt, ...) \
+    panicf(VMM, fmt, ##__VA_ARGS__)
 
 /* 
   vmm design include two parts: mm_struct (mm) & vma_struct (vma)
@@ -343,13 +353,16 @@ check_pgfault(void) {
     assert(find_vma(mm, addr) == vma);
 
     int i, sum = 0;
+    vmm_debugf("begin to write from addr @0x%08x\n", addr);
     for (i = 0; i < 100; i ++) {
+        RAW_LOGGING vmm_debugf("writing @0x%08x with value %u\n", (char *) addr + i, i); ENDR
         *(char *)(addr + i) = i;
         sum += i;
     }
     for (i = 0; i < 100; i ++) {
         sum -= *(char *)(addr + i);
     }
+    vmm_debugf("pgdir[0]=0x%08x\n", pgdir[0]);
     assert(sum == 0);
 
     page_remove(pgdir, ROUNDDOWN(addr, PGSIZE));
@@ -433,7 +446,6 @@ do_pgfault(struct mm_struct *mm, uint32_t error_code, uintptr_t addr) {
 
     ret = -E_NO_MEM;
 
-    pte_t *ptep=NULL;
     /*LAB3 EXERCISE 1: YOUR CODE
     * Maybe you want help comment, BELOW comments can help you finish the code
     *
@@ -493,7 +505,40 @@ do_pgfault(struct mm_struct *mm, uint32_t error_code, uintptr_t addr) {
         }
    }
 #endif
-   ret = 0;
+    vmm_debugf("handling pg fault.\n");
+
+    assert(mm->pgdir);
+    pte_t *ptep = get_pte(mm->pgdir, addr, 1);
+    if ((*ptep) == 0) {
+        /* the phy addr does not exist */
+        vmm_debugf("allocing phy address for pte...\n");
+        struct Page *p = pgdir_alloc_page(mm->pgdir, addr, perm);
+        if (p == NULL) {
+            vmm_warnf("fail to pgdir_alloc_page. Is running out of memory?\n");
+            ret = -E_NO_MEM;
+            goto failed;
+        }
+    } else {
+        /* the R/W is valid but page frame not present. */
+        if (swap_init_ok) {
+            vmm_debugf("swaping page frame from disk to mem...\n");
+            struct Page* load_pages = NULL;
+            int errno = swap_in(mm, addr, &load_pages);
+            if (errno != 0) {
+                vmm_warnf("fails to call swap_in with errno %u\n", errno);
+            }
+            assert(load_pages != NULL);
+            page_insert(mm->pgdir, load_pages, addr, perm);
+            swap_map_swappable(mm, addr, load_pages, 1); /* 4th para unknown what to do */
+            load_pages->pra_vaddr = addr; /* NOTICE: do not forget this */
+        } else {
+            vmm_errorf("swap init NOT OK. unable to handle page swap for pte=%x, addr=0x%08x\n", *ptep, addr);
+            goto failed;
+        }
+    }
+
+
+    ret = 0;
 failed:
     return ret;
 }

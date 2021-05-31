@@ -18,6 +18,8 @@ __alltraps:
     movw %ax, %es
 
     # push %esp to pass a pointer to the trapframe as an argument to trap()
+    # esp <- esp - 4
+    # M[ss:esp] <- SRC
     pushl %esp
 
     # call trap(tf), where tf=%esp
@@ -40,10 +42,21 @@ __trapret:
 
     # get rid of the trap number and error code
     addl $0x8, %esp
+    # the stack is supposed to be
+    # Low address -> High address
+    # 32: eip
+    # 32: cs (and padding)
+    # 32: elflags
+    # (Optional) BELOW ONLY WHEN CROSSING RINGS:
+    # 32: esp 
+    # 32: ss (and padding)
     iret
 
+# call graph: switch_to --> forkret(by modify stack and ret)
+#     --> forkrets --> jump to __trapret
 .globl forkrets
 forkrets:
     # set stack to this new process's trapframe
+    # call to here, 4(%esp) = first parameter = current->tf
     movl 4(%esp), %esp
     jmp __trapret

@@ -94,11 +94,57 @@ lab1_print_cur_status(void) {
 static void
 lab1_switch_to_user(void) {
     //LAB1 CHALLENGE 1 : TODO
+    /**
+     * Stack: Low address -> High address
+     * 32: ss (and padding)
+     * 32: esp
+     * 32: eflags
+     * 32: cs (and padding)
+     * 32: eip
+     */
+    __asm__ volatile(
+        "movl %%esp, %%eax \n\t"
+        "pushl %%ss \n\t"
+        "pushl %%eax \n\t"
+        "int %0 \n\t"
+        : /* output */
+        : "i"(T_SWITCH_TOU)
+    );
 }
 
 static void
 lab1_switch_to_kernel(void) {
     //LAB1 CHALLENGE 1 :  TODO
+    /**
+     * TSS works here and change ss:esp to `stack0` when int 0x70.
+     * After the interrupt, ss:esp should be manually set to the origin value.
+     */
+    __asm__ volatile(
+        "int %0 \n\t"
+        "movw 0x4(%%esp), %%ss \n\t"
+        "popl %%esp \n\t"
+        : /* output */
+        : "i"(T_SWITCH_TOK)
+    );
+}
+
+static void
+trigger_gpf() {
+    __asm__ volatile(
+        "int $0x1 \n\t"
+    );
+}
+
+static uint32_t
+get_ticks() {
+    uint32_t __ticks;
+    __asm__ volatile(
+        "movl $0xff, %%eax \n\t"
+        "int $0x80 \n\t"
+        : "=a"(__ticks)
+        : /* empty input */
+    );
+    return __ticks;
 }
 
 static void
@@ -107,6 +153,9 @@ lab1_switch_test(void) {
     cprintf("+++ switch to  user  mode +++\n");
     lab1_switch_to_user();
     lab1_print_cur_status();
+    // trigger_gpf(); /* trigger general protection fault pass test */
+    uint32_t _ticks = get_ticks();
+    cprintf("Get ticks %u in user mode\n", _ticks);
     cprintf("+++ switch to kernel mode +++\n");
     lab1_switch_to_kernel();
     lab1_print_cur_status();

@@ -4,7 +4,8 @@ switch_to:                      # switch_to(from, to)
 
     # save from's registers
     movl 4(%esp), %eax          # eax points to from
-    popl 0(%eax)                # save eip !popl
+    popl 0(%eax)                # save eip by popl to from's context's eip
+    # after that, esp points to `from`
     movl %esp, 4(%eax)
     movl %ebx, 8(%eax)
     movl %ecx, 12(%eax)
@@ -15,7 +16,7 @@ switch_to:                      # switch_to(from, to)
 
     # restore to's registers
     movl 4(%esp), %eax          # not 8(%esp): popped return address already
-                                # eax now points to to
+                                # eax now points to `to`
     movl 28(%eax), %ebp
     movl 24(%eax), %edi
     movl 20(%eax), %esi
@@ -24,7 +25,7 @@ switch_to:                      # switch_to(from, to)
     movl 8(%eax), %ebx
     movl 4(%eax), %esp
 
-    pushl 0(%eax)               # push eip
+    pushl 0(%eax)               # push eip, eip is modified by copy_thread
 
     ret
 
