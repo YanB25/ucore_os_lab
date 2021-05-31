@@ -105,12 +105,12 @@ idt_init(void) {
       *     Notice: the argument of lidt is idt_pd. try to find it!
       */
     for (int i = 0; i < N_INT; ++i) {
-        SETGATE(idt[i], 0, PROT_MODE_CSEG, __vectors[i], DPL_KERNEL);
+        SETGATE(idt[i], 0, GD_KTEXT, __vectors[i], DPL_KERNEL);
     }
     // set DPL to DPL_USER to permit user to use `int 80`
-    SETGATE(idt[T_SYSCALL], 1, PROT_MODE_CSEG, __vectors[T_SYSCALL] , DPL_USER);
+    SETGATE(idt[T_SYSCALL], 1, GD_KTEXT, __vectors[T_SYSCALL] , DPL_USER);
     /* temporary open this int */
-    SETGATE(idt[T_SWITCH_TOK], 1, PROT_MODE_CSEG, __vectors[T_SWITCH_TOK] , DPL_USER);
+    SETGATE(idt[T_SWITCH_TOK], 1, GD_KTEXT, __vectors[T_SWITCH_TOK] , DPL_USER);
     // load IDT
     lidt(&idt_pd);
      /* LAB5 YOUR CODE */ 
@@ -283,6 +283,7 @@ trap_dispatch(struct trapframe *tf) {
         ticks++;
         if (ticks % TICK_NUM == 0) {
             print_ticks();
+            current->need_resched = 1;
         }
         /* LAB5 YOUR CODE */
         /* you should upate you lab1 code (just add ONE or TWO lines of code):

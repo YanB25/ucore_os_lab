@@ -121,6 +121,9 @@ alloc_proc(void) {
      *       uint32_t wait_state;                        // waiting state
      *       struct proc_struct *cptr, *yptr, *optr;     // relations between processes
 	 */
+        proc->wait_state = 0;
+        proc->yptr = NULL;
+        proc->optr = proc->cptr = NULL;
     }
     return proc;
 }
@@ -412,18 +415,6 @@ do_fork(uint32_t clone_flags, uintptr_t stack, struct trapframe *tf) {
     //    5. insert proc_struct into hash_list && proc_list
     //    6. call wakeup_proc to make the new child process RUNNABLE
     //    7. set ret vaule using child proc's pid
-    struct proc_struct *procp = alloc_proc();
-    if (procp == NULL) {
-        proc_warnf("could not alloc process.");
-    }
-    setup_kstack(procp);
-    copy_mm(clone_flags, procp);
-    copy_thread(procp, stack, tf);
-    ret = procp->pid = get_pid();
-    hash_proc(procp);
-    list_add(&proc_list, &(procp->list_link));
-    wakeup_proc(procp);
-
 	//LAB5 YOUR CODE : (update LAB4 steps)
    /* Some Functions
     *    set_links:  set the relation links of process.  ALSO SEE: remove_links:  lean the relation links of process 
@@ -431,7 +422,30 @@ do_fork(uint32_t clone_flags, uintptr_t stack, struct trapframe *tf) {
 	*    update step 1: set child proc's parent to current process, make sure current process's wait_state is 0
 	*    update step 5: insert proc_struct into hash_list && proc_list, set the relation links of process
     */
-	
+    struct proc_struct *procp = alloc_proc();
+    if (procp == NULL) {
+        proc_warnf("could not alloc process.");
+        goto fork_out;
+    }
+    procp->parent = current;
+    assert(current->wait_state == 0);
+    if (setup_kstack(procp) != 0) {
+        goto bad_fork_cleanup_proc;
+    }
+    if (copy_mm(clone_flags, procp) != 0) {
+        goto bad_fork_cleanup_kstack;
+    }
+    copy_thread(procp, stack, tf);
+    bool flag;
+    local_intr_save(flag);
+    {
+        ret = procp->pid = get_pid();
+        hash_proc(procp);
+        set_links(procp);
+    }
+    local_intr_restore(flag);
+    wakeup_proc(procp);
+
 fork_out:
     return ret;
 
@@ -630,6 +644,11 @@ load_icode(unsigned char *binary, size_t size) {
      *          tf_eip should be the entry point of this binary program (elf->e_entry)
      *          tf_eflags should be set to enable computer to produce Interrupt
      */
+    tf->tf_cs = USER_CS;
+    tf->tf_ds = tf->tf_es = tf->tf_ss = USER_DS;
+    tf->tf_esp = USTACKTOP;
+    tf->tf_eip = elf->e_entry;
+    tf->tf_eflags = FL_IF;
     ret = 0;
 out:
     return ret;
@@ -839,6 +858,7 @@ init_main(void *arg) {
 //           - create the second kernel thread init_main
 void
 proc_init(void) {
+    cprintf("proc_init()...\n");
     int i;
 
     list_init(&proc_list);
@@ -869,6 +889,7 @@ proc_init(void) {
 
     assert(idleproc != NULL && idleproc->pid == 0);
     assert(initproc != NULL && initproc->pid == 1);
+    cprintf("proc_init() finished\n");
 }
 
 // cpu_idle - at the end of kern_init, the first kernel thread idleproc will do below works
