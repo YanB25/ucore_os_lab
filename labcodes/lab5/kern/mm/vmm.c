@@ -509,6 +509,10 @@ do_pgfault(struct mm_struct *mm, uint32_t error_code, uintptr_t addr) {
 
     assert(mm->pgdir);
     pte_t *ptep = get_pte(mm->pgdir, addr, 1);
+    if (ptep == NULL) {
+        cprintf("get_pte failed");
+        goto failed;
+    }
     if ((*ptep) == 0) {
         /* the phy addr does not exist */
         vmm_debugf("allocing phy address for pte...\n");
@@ -520,21 +524,22 @@ do_pgfault(struct mm_struct *mm, uint32_t error_code, uintptr_t addr) {
         }
     } else {
         /* the R/W is valid but page frame not present. */
+        struct Page* load_pages = NULL;
         if (swap_init_ok) {
             vmm_debugf("swaping page frame from disk to mem...\n");
-            struct Page* load_pages = NULL;
             int errno = swap_in(mm, addr, &load_pages);
             if (errno != 0) {
                 vmm_warnf("fails to call swap_in with errno %u\n", errno);
+                goto failed;
             }
             assert(load_pages != NULL);
-            page_insert(mm->pgdir, load_pages, addr, perm);
-            swap_map_swappable(mm, addr, load_pages, 1); /* 4th para unknown what to do */
-            load_pages->pra_vaddr = addr; /* NOTICE: do not forget this */
         } else {
             vmm_errorf("swap init NOT OK. unable to handle page swap for pte=%x, addr=0x%08x\n", *ptep, addr);
             goto failed;
         }
+        page_insert(mm->pgdir, load_pages, addr, perm);
+        swap_map_swappable(mm, addr, load_pages, 1); /* 4th para unknown what to do */
+        load_pages->pra_vaddr = addr; /* NOTICE: do not forget this */
     }
 
 
