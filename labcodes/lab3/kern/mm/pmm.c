@@ -147,13 +147,13 @@ gdt_init(void) {
 static void
 init_pmm_manager(void) {
     pmm_manager = &default_pmm_manager;
+    cprintf("memory management: %s\n", pmm_manager->name);
     /**
      * FIXME: buddy_pmm_manager does not use and maintain free_area_t.
      * Thus, it fails at swap.c, check_swap when iterating free_list.
      * Try to fix this, make buddy_pmm_manager work as expect.
      */
     // pmm_manager = &buddy_pmm_manager;
-    pmm_infof("memory management: %s\n", pmm_manager->name);
     pmm_manager->init();
 }
 
@@ -547,7 +547,7 @@ pgdir_alloc_page(pde_t *pgdir, uintptr_t la, uint32_t perm) {
 static void
 check_alloc_page(void) {
     pmm_manager->check();
-    pmm_infof("check_alloc_page() succeeded!\n");
+    cprintf("check_alloc_page() succeeded!\n");
 }
 
 static void
@@ -595,7 +595,7 @@ check_pgdir(void) {
     free_page(pde2page(boot_pgdir[0]));
     boot_pgdir[0] = 0;
 
-    pmm_infof("check_pgdir() succeeded!\n");
+    cprintf("check_pgdir() succeeded!\n");
 }
 
 static void
@@ -629,7 +629,7 @@ check_boot_pgdir(void) {
     free_page(pde2page(boot_pgdir[0]));
     boot_pgdir[0] = 0;
 
-    pmm_infof("check_boot_pgdir() succeeded!\n");
+    cprintf("check_boot_pgdir() succeeded!\n");
 }
 
 //perm2str - use string 'u,r,w,-' to present the permission

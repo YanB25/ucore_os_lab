@@ -53,7 +53,6 @@ swap_init(void)
      {
           swap_init_ok = 1;
           cprintf("SWAP: manager = %s\n", sm->name);
-          swap_debugf("before entering check_swap\n");
           check_swap();
      }
 
@@ -98,7 +97,7 @@ swap_out(struct mm_struct *mm, int n, int in_tick)
           // cprintf("i %d, SWAP: call swap_out_victim\n",i);
           int r = sm->swap_out_victim(mm, &page, in_tick);
           if (r != 0) {
-               swap_warnf("i %d, swap_out: call swap_out_victim failed\n",i);
+                    cprintf("i %d, swap_out: call swap_out_victim failed\n",i);
                break;
           }          
           //assert(!PageReserved(page));
@@ -115,7 +114,7 @@ swap_out(struct mm_struct *mm, int n, int in_tick)
                continue;
           }
           else {
-               swap_infof("swap_out: i %d, store page in vaddr 0x%x to disk swap entry %d\n", i, v, page->pra_vaddr/PGSIZE+1);
+               cprintf("swap_out: i %d, store page in vaddr 0x%x to disk swap entry %d\n", i, v, page->pra_vaddr/PGSIZE+1);
                *ptep = (page->pra_vaddr/PGSIZE+1)<<8;
                free_page(page);
           }
@@ -139,7 +138,7 @@ swap_in(struct mm_struct *mm, uintptr_t addr, struct Page **ptr_result)
      {
         assert(r!=0);
      }
-     swap_infof("swap_in: load disk swap entry %d with swap_page in vadr 0x%x\n", (*ptep)>>8, addr);
+     cprintf("swap_in: load disk swap entry %d with swap_page in vadr 0x%x\n", (*ptep)>>8, addr);
      *ptr_result=result;
      return 0;
 }
@@ -186,8 +185,6 @@ extern free_area_t free_area;
 static void
 check_swap(void)
 {
-     swap_debugf("entered check_swap\n");
-
     //backup mem env
      int ret, count = 0, total = 0, i;
      list_entry_t *le = &free_list;
