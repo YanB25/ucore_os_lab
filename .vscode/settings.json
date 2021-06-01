@@ -3,6 +3,7 @@
         "stdio.h": "c",
         "buddy_pmm.h": "c",
         "string.h": "c",
-        "error.h": "c"
+        "error.h": "c",
+        "console.h": "c"
     }
 }
