@@ -3,6 +3,13 @@
         "stdio.h": "c",
         "buddy_pmm.h": "c",
         "string.h": "c",
-        "error.h": "c"
+        "error.h": "c",
+        "*.tcc": "cpp",
+        "unordered_map": "cpp",
+        "fstream": "cpp",
+        "istream": "cpp",
+        "ostream": "cpp",
+        "sstream": "cpp",
+        "numeric": "cpp"
     }
 }
