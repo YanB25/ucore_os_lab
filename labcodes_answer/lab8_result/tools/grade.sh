@@ -1,5 +1,7 @@
 #!/bin/sh
 
+# set -o xtrace
+
 verbose=false
 if [ "x$1" = "x-v" ]; then
     verbose=true
@@ -136,7 +138,9 @@ run_qemu() {
     t0=$(get_time)
     (
         ulimit -t $timeout
+        echo "!!!!!!"
         exec $qemu -nographic $qemuopts -serial file:$qemu_out -monitor null -no-reboot $qemuextra
+        echo "finish !!!!!!"
     ) > $out 2> $err &
     pid=$!
 
@@ -317,8 +321,10 @@ osimg=$(make_print ucoreimg)
 ## swap image
 swapimg=$(make_print swapimg)
 
+sfsimg=$(make_print sfsimg)
+
 ## set default qemu-options
-qemuopts="-hda $osimg -drive file=$swapimg,media=disk,cache=writeback"
+qemuopts="-hda $osimg -drive file=$swapimg,media=disk,cache=writeback -drive file=$sfsimg,media=disk,cache=writeback"
 
 ## set break-function, default is readline
 brkfun=readline
