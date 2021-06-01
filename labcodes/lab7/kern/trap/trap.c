@@ -39,6 +39,8 @@ static struct pseudodesc idt_pd = {
     sizeof(idt) - 1, (uintptr_t)idt
 };
 
+extern uintptr_t __vectors[]; // entry addrs of each ISR
+
 /* idt_init - initialize IDT to each of the entry points in kern/trap/vectors.S */
 void
 idt_init(void) {
@@ -54,6 +56,15 @@ idt_init(void) {
       *     You don't know the meaning of this instruction? just google it! and check the libs/x86.h to know more.
       *     Notice: the argument of lidt is idt_pd. try to find it!
       */
+    for (int i = 0; i < sizeof(idt) / sizeof(struct gatedesc); ++i) {
+        SETGATE(idt[i], 0, GD_KTEXT, __vectors[i], DPL_KERNEL);
+    }
+    // set DPL to DPL_USER to permit user to use `int 80`
+    SETGATE(idt[T_SYSCALL], 1, GD_KTEXT, __vectors[T_SYSCALL] , DPL_USER);
+    /* temporary open this int */
+    SETGATE(idt[T_SWITCH_TOK], 1, GD_KTEXT, __vectors[T_SWITCH_TOK] , DPL_USER);
+    // load IDT
+    lidt(&idt_pd);
      /* LAB5 YOUR CODE */ 
      //you should update your lab1 code (just add ONE or TWO lines of code), let user app to use syscall to get the service of ucore
      //so you should setup the syscall interrupt gate in here
@@ -191,6 +202,7 @@ trap_dispatch(struct trapframe *tf) {
 
     switch (tf->tf_trapno) {
     case T_PGFLT:  //page fault
+        // kern_debugf("Page Fault Trap handling begin...\n");
         if ((ret = pgfault_handler(tf)) != 0) {
             print_trapframe(tf);
             if (current == NULL) {
@@ -220,6 +232,7 @@ trap_dispatch(struct trapframe *tf) {
          * (2) Every TICK_NUM cycle, you can print some info using a funciton, such as print_ticks().
          * (3) Too Simple? Yes, I think so!
          */
+        ticks++;
         /* LAB5 YOUR CODE */
         /* you should upate you lab1 code (just add ONE or TWO lines of code):
          *    Every TICK_NUM cycle, you should set current process's current->need_resched = 1
@@ -234,6 +247,7 @@ trap_dispatch(struct trapframe *tf) {
          * IMPORTANT FUNCTIONS:
 	     * run_timer_list
          */
+        sched_class_proc_tick(current);
         break;
     case IRQ_OFFSET + IRQ_COM1:
         c = cons_getc();
@@ -246,7 +260,7 @@ trap_dispatch(struct trapframe *tf) {
     //LAB1 CHALLENGE 1 : YOUR CODE you should modify below codes.
     case T_SWITCH_TOU:
     case T_SWITCH_TOK:
-        panic("T_SWITCH_** ??\n");
+        panic("not implemented\n");
         break;
     case IRQ_OFFSET + IRQ_IDE1:
     case IRQ_OFFSET + IRQ_IDE2:
@@ -258,6 +272,9 @@ trap_dispatch(struct trapframe *tf) {
             cprintf("unhandled trap.\n");
             do_exit(-E_KILLED);
         }
+        uint32_t tn = tf->tf_trapno;
+        uint32_t en = tf->tf_err;
+        cprintf("Unexpected uncategoried trap 0x%08x(%u) with errno 0x%08x(%u)\n", tn, tn, en, en);
         // in kernel, it must be a mistake
         panic("unexpected trap in kernel.\n");
 

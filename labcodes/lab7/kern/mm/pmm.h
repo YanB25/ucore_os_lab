@@ -6,6 +6,12 @@
 #include <memlayout.h>
 #include <atomic.h>
 #include <assert.h>
+#include <logging.h>
+
+#define pmm_infof(fmt, ...) \
+    infof(PMM, fmt, ##__VA_ARGS__)
+#define pmm_warnf(fmt, ...) \
+    warnf(PMM, fmt, ##__VA_ARGS__)
 
 // pmm_manager is a physical memory management class. A special pmm manager - XXX_pmm_manager
 // only needs to implement the methods in pmm_manager class, then XXX_pmm_manager can be used

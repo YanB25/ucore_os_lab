@@ -11,6 +11,7 @@
         "ostream": "cpp",
         "sstream": "cpp",
         "numeric": "cpp",
-        "default_sched_c": "c"
+        "default_sched_c": "c",
+        "sched.h": "c"
     }
 }
