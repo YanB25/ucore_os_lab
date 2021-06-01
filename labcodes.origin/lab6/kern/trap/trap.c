@@ -17,6 +17,13 @@
 #include <sync.h>
 #include <proc.h>
 
+#include <logging.h>
+
+#define kern_debugf(fmt, ...) \
+    debugf(KERNEL, fmt, ##__VA_ARGS__)
+#define kern_infof(fmt, ...) \
+    infof(KERNEL, fmt, ##__VA_ARGS__)
+
 #define TICK_NUM 100
 
 static void print_ticks() {

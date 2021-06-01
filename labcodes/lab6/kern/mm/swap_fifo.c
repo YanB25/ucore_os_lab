@@ -5,6 +5,10 @@
 #include <swap.h>
 #include <swap_fifo.h>
 #include <list.h>
+#include <logging.h>
+
+#define swap_debugf(fmt, ...) \
+    debugf(SWAP, fmt, ##__VA_ARGS__)
 
 /* [wikipedia]The simplest Page Replacement Algorithm(PRA) is a FIFO algorithm. The first-in, first-out
  * page replacement algorithm is a low-overhead algorithm that requires little book-keeping on
@@ -51,6 +55,8 @@ _fifo_map_swappable(struct mm_struct *mm, uintptr_t addr, struct Page *page, int
     //record the page access situlation
     /*LAB3 EXERCISE 2: YOUR CODE*/ 
     //(1)link the most recent arrival page at the back of the pra_list_head qeueue.
+    swap_debugf("call list_add_before to add entry to head\n");
+    list_add(head, entry);
     return 0;
 }
 /*
@@ -60,18 +66,25 @@ _fifo_map_swappable(struct mm_struct *mm, uintptr_t addr, struct Page *page, int
 static int
 _fifo_swap_out_victim(struct mm_struct *mm, struct Page ** ptr_page, int in_tick)
 {
-     list_entry_t *head=(list_entry_t*) mm->sm_priv;
-         assert(head != NULL);
-     assert(in_tick==0);
-     /* Select the victim */
-     /*LAB3 EXERCISE 2: YOUR CODE*/ 
-     //(1)  unlink the  earliest arrival page in front of pra_list_head qeueue
-     //(2)  assign the value of *ptr_page to the addr of this page
-     return 0;
+    list_entry_t *head=(list_entry_t*) mm->sm_priv;
+        assert(head != NULL);
+    assert(in_tick==0);
+    /* Select the victim */
+    /*LAB3 EXERCISE 2: YOUR CODE*/ 
+    //(1)  unlink the  earliest arrival page in front of pra_list_head qeueue
+    //(2)  assign the value of *ptr_page to the addr of this page
+    list_entry_t *le = head->prev;
+    assert(head!=le);
+    struct Page *p = le2page(le, pra_page_link);
+    list_del(le);
+    assert(p !=NULL);
+    *ptr_page = p;
+    return 0;
 }
 
 static int
 _fifo_check_swap(void) {
+    swap_debugf("+++++++++++++++ BEGIN TO CHECK SWAP +++++++++++++++++++++\n");
     cprintf("write Virt Page c in fifo_check_swap\n");
     *(unsigned char *)0x3000 = 0x0c;
     assert(pgfault_num==4);

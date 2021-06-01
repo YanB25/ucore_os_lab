@@ -7,6 +7,15 @@
 #include <memlayout.h>
 #include <skew_heap.h>
 
+#include <logging.h>
+
+#define proc_debugf(fmt, ...) \
+    debugf(PROC, fmt, ##__VA_ARGS__)
+#define proc_infof(fmt, ...) \
+    infof(PROC, fmt, ##__VA_ARGS__)
+#define proc_warnf(fmt, ...) \
+    warnf(PROC, fmt, ##__VA_ARGS__)
+
 
 // process's state in his life cycle
 enum proc_state {
